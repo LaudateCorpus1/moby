@@ -6,7 +6,7 @@ package local // import "github.com/docker/docker/libcontainerd/local"
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -548,10 +548,10 @@ func newIOFromProcess(newProcess hcsshim.Process, terminal bool) (*cio.DirectIO,
 
 	// Convert io.ReadClosers to io.Readers
 	if stdout != nil {
-		dio.Stdout = ioutil.NopCloser(&autoClosingReader{ReadCloser: stdout})
+		dio.Stdout = io.NopCloser(&autoClosingReader{ReadCloser: stdout})
 	}
 	if stderr != nil {
-		dio.Stderr = ioutil.NopCloser(&autoClosingReader{ReadCloser: stderr})
+		dio.Stderr = io.NopCloser(&autoClosingReader{ReadCloser: stderr})
 	}
 	return dio, nil
 }
@@ -687,7 +687,7 @@ func (c *client) Exec(ctx context.Context, containerID, processID string, spec *
 	return pid, nil
 }
 
-// Signal handles `docker stop` on Windows. While Linux has support for
+// SignalProcess handles `docker stop` on Windows. While Linux has support for
 // the full range of signals, signals aren't really implemented on Windows.
 // We fake supporting regular stop and -9 to force kill.
 func (c *client) SignalProcess(_ context.Context, containerID, processID string, signal int) error {
@@ -731,7 +731,7 @@ func (c *client) SignalProcess(_ context.Context, containerID, processID string,
 	return nil
 }
 
-// Resize handles a CLI event to resize an interactive docker run or docker
+// ResizeTerminal handles a CLI event to resize an interactive docker run or docker
 // exec window.
 func (c *client) ResizeTerminal(_ context.Context, containerID, processID string, width, height int) error {
 	_, p, err := c.getProcess(containerID, processID)
@@ -888,8 +888,8 @@ func (c *client) Restore(ctx context.Context, id string, attachStdio libcontaine
 	}, nil
 }
 
-// GetPidsForContainer returns a list of process IDs running in a container.
-// Not used on Windows.
+// ListPids returns a list of process IDs running in a container. It is not
+// implemented on Windows.
 func (c *client) ListPids(_ context.Context, _ string) ([]uint32, error) {
 	return nil, errors.New("not implemented on Windows")
 }

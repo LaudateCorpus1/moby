@@ -2,16 +2,14 @@ package sysinfo // import "github.com/docker/docker/pkg/sysinfo"
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path"
 	"strings"
-	"sync"
 
 	cdcgroups "github.com/containerd/cgroups"
+	cdseccomp "github.com/containerd/containerd/pkg/seccomp"
 	"github.com/opencontainers/runc/libcontainer/cgroups"
 	"github.com/sirupsen/logrus"
-	"golang.org/x/sys/unix"
 )
 
 func findCgroupMountpoints() (map[string]string, error) {
@@ -194,13 +192,13 @@ func applyCPUSetCgroupInfo(info *SysInfo) {
 
 	var err error
 
-	cpus, err := ioutil.ReadFile(path.Join(mountPoint, "cpuset.cpus"))
+	cpus, err := os.ReadFile(path.Join(mountPoint, "cpuset.cpus"))
 	if err != nil {
 		return
 	}
 	info.Cpus = strings.TrimSpace(string(cpus))
 
-	mems, err := ioutil.ReadFile(path.Join(mountPoint, "cpuset.mems"))
+	mems, err := os.ReadFile(path.Join(mountPoint, "cpuset.mems"))
 	if err != nil {
 		return
 	}
@@ -233,7 +231,7 @@ func applyNetworkingInfo(info *SysInfo) {
 // applyAppArmorInfo adds whether AppArmor is enabled to the info.
 func applyAppArmorInfo(info *SysInfo) {
 	if _, err := os.Stat("/sys/kernel/security/apparmor"); !os.IsNotExist(err) {
-		if _, err := ioutil.ReadFile("/sys/kernel/security/apparmor/profiles"); err == nil {
+		if _, err := os.ReadFile("/sys/kernel/security/apparmor/profiles"); err == nil {
 			info.AppArmor = true
 		}
 	}
@@ -246,23 +244,9 @@ func applyCgroupNsInfo(info *SysInfo) {
 	}
 }
 
-var (
-	seccompOnce    sync.Once
-	seccompEnabled bool
-)
-
 // applySeccompInfo checks if Seccomp is supported, via CONFIG_SECCOMP.
 func applySeccompInfo(info *SysInfo) {
-	seccompOnce.Do(func() {
-		// Check if Seccomp is supported, via CONFIG_SECCOMP.
-		if err := unix.Prctl(unix.PR_GET_SECCOMP, 0, 0, 0, 0); err != unix.EINVAL {
-			// Make sure the kernel has CONFIG_SECCOMP_FILTER.
-			if err := unix.Prctl(unix.PR_SET_SECCOMP, unix.SECCOMP_MODE_FILTER, 0, 0, 0); err != unix.EINVAL {
-				seccompEnabled = true
-			}
-		}
-	})
-	info.Seccomp = seccompEnabled
+	info.Seccomp = cdseccomp.IsEnabled()
 }
 
 func cgroupEnabled(mountPoint, name string) bool {
@@ -271,7 +255,7 @@ func cgroupEnabled(mountPoint, name string) bool {
 }
 
 func readProcBool(path string) bool {
-	val, err := ioutil.ReadFile(path)
+	val, err := os.ReadFile(path)
 	if err != nil {
 		return false
 	}
