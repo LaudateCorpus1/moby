@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"path"
-	"runtime"
 	"sync"
 	"time"
 
@@ -21,7 +20,7 @@ import (
 	"github.com/containerd/containerd/remotes/docker"
 	"github.com/containerd/containerd/remotes/docker/schema1"
 	distreference "github.com/docker/distribution/reference"
-	"github.com/docker/docker/distribution"
+	dimages "github.com/docker/docker/daemon/images"
 	"github.com/docker/docker/distribution/metadata"
 	"github.com/docker/docker/distribution/xfer"
 	"github.com/docker/docker/image"
@@ -51,7 +50,7 @@ type SourceOpt struct {
 	ContentStore    content.Store
 	CacheAccessor   cache.Accessor
 	ReferenceStore  reference.Store
-	DownloadManager distribution.RootFSDownloadManager
+	DownloadManager *xfer.LayerDownloadManager
 	MetadataStore   metadata.V2MetadataService
 	ImageStore      image.Store
 	RegistryHosts   docker.RegistryHosts
@@ -563,7 +562,7 @@ func (p *puller) Snapshot(ctx context.Context, g session.Group) (cache.Immutable
 	}()
 
 	r := image.NewRootFS()
-	rootFS, release, err := p.is.DownloadManager.Download(ctx, *r, runtime.GOOS, layers, pkgprogress.ChanOutput(pchan))
+	rootFS, release, err := p.is.DownloadManager.Download(ctx, *r, layers, pkgprogress.ChanOutput(pchan))
 	stopProgress()
 	if err != nil {
 		return nil, err
@@ -853,11 +852,11 @@ func resolveModeToString(rm source.ResolveMode) string {
 }
 
 func platformMatches(img *image.Image, p *ocispec.Platform) bool {
-	if img.Architecture != p.Architecture {
-		return false
-	}
-	if img.Variant != "" && img.Variant != p.Variant {
-		return false
-	}
-	return img.OS == p.OS
+	return dimages.OnlyPlatformWithFallback(*p).Match(ocispec.Platform{
+		Architecture: img.Architecture,
+		OS:           img.OS,
+		OSVersion:    img.OSVersion,
+		OSFeatures:   img.OSFeatures,
+		Variant:      img.Variant,
+	})
 }

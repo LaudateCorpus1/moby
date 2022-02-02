@@ -29,6 +29,7 @@ import (
 	"github.com/docker/docker/daemon/config"
 	"github.com/docker/docker/daemon/initlayer"
 	"github.com/docker/docker/errdefs"
+	"github.com/docker/docker/libcontainerd/remote"
 	"github.com/docker/docker/libnetwork"
 	nwconfig "github.com/docker/docker/libnetwork/config"
 	"github.com/docker/docker/libnetwork/drivers/bridge"
@@ -627,11 +628,13 @@ func verifyCgroupDriver(config *config.Config) error {
 
 // UsingSystemd returns true if cli option includes native.cgroupdriver=systemd
 func UsingSystemd(config *config.Config) bool {
-	if getCD(config) == cgroupSystemdDriver {
+	cd := getCD(config)
+
+	if cd == cgroupSystemdDriver {
 		return true
 	}
 	// On cgroup v2 hosts, default to systemd driver
-	if getCD(config) == "" && cgroups.Mode() == cgroups.Unified && isRunningSystemd() {
+	if cd == "" && cgroups.Mode() == cgroups.Unified && isRunningSystemd() {
 		return true
 	}
 	return false
@@ -866,6 +869,7 @@ func (daemon *Daemon) initNetworkController(config *config.Config, activeSandbox
 
 	if len(activeSandboxes) > 0 {
 		logrus.Info("There are old running containers, the network config will not take affect")
+		setHostGatewayIP(daemon.configStore, controller)
 		return controller, nil
 	}
 
@@ -903,33 +907,38 @@ func (daemon *Daemon) initNetworkController(config *config.Config, activeSandbox
 	}
 
 	// Set HostGatewayIP to the default bridge's IP  if it is empty
-	if daemon.configStore.HostGatewayIP == nil && controller != nil {
-		if n, err := controller.NetworkByName("bridge"); err == nil {
-			v4Info, v6Info := n.Info().IpamInfo()
-			var gateway net.IP
-			if len(v4Info) > 0 {
-				gateway = v4Info[0].Gateway.IP
-			} else if len(v6Info) > 0 {
-				gateway = v6Info[0].Gateway.IP
-			}
-			daemon.configStore.HostGatewayIP = gateway
-		}
-	}
+	setHostGatewayIP(daemon.configStore, controller)
+
 	return controller, nil
 }
 
-func driverOptions(config *config.Config) []nwconfig.Option {
-	bridgeConfig := options.Generic{
-		"EnableIPForwarding":  config.BridgeConfig.EnableIPForward,
-		"EnableIPTables":      config.BridgeConfig.EnableIPTables,
-		"EnableIP6Tables":     config.BridgeConfig.EnableIP6Tables,
-		"EnableUserlandProxy": config.BridgeConfig.EnableUserlandProxy,
-		"UserlandProxyPath":   config.BridgeConfig.UserlandProxyPath}
-	bridgeOption := options.Generic{netlabel.GenericData: bridgeConfig}
+// setHostGatewayIP sets cfg.HostGatewayIP to the default bridge's IP if it is empty.
+func setHostGatewayIP(config *config.Config, controller libnetwork.NetworkController) {
+	if config.HostGatewayIP != nil {
+		return
+	}
+	if n, err := controller.NetworkByName("bridge"); err == nil {
+		v4Info, v6Info := n.Info().IpamInfo()
+		var gateway net.IP
+		if len(v4Info) > 0 {
+			gateway = v4Info[0].Gateway.IP
+		} else if len(v6Info) > 0 {
+			gateway = v6Info[0].Gateway.IP
+		}
+		config.HostGatewayIP = gateway
+	}
+}
 
-	dOptions := []nwconfig.Option{}
-	dOptions = append(dOptions, nwconfig.OptionDriverConfig("bridge", bridgeOption))
-	return dOptions
+func driverOptions(config *config.Config) nwconfig.Option {
+	return nwconfig.OptionDriverConfig("bridge", options.Generic{
+		netlabel.GenericData: options.Generic{
+			"EnableIPForwarding":  config.BridgeConfig.EnableIPForward,
+			"EnableIPTables":      config.BridgeConfig.EnableIPTables,
+			"EnableIP6Tables":     config.BridgeConfig.EnableIP6Tables,
+			"EnableUserlandProxy": config.BridgeConfig.EnableUserlandProxy,
+			"UserlandProxyPath":   config.BridgeConfig.UserlandProxyPath,
+		},
+	})
 }
 
 func initBridgeDriver(controller libnetwork.NetworkController, config *config.Config) error {
@@ -1223,21 +1232,21 @@ func setupDaemonRoot(config *config.Config, rootDir string, remappedRoot idtools
 		}
 	}
 
+	id := idtools.Identity{UID: idtools.CurrentIdentity().UID, GID: remappedRoot.GID}
+	// First make sure the current root dir has the correct perms.
+	if err := idtools.MkdirAllAndChown(config.Root, 0710, id); err != nil {
+		return errors.Wrapf(err, "could not create or set daemon root permissions: %s", config.Root)
+	}
+
 	// if user namespaces are enabled we will create a subtree underneath the specified root
 	// with any/all specified remapped root uid/gid options on the daemon creating
 	// a new subdirectory with ownership set to the remapped uid/gid (so as to allow
 	// `chdir()` to work for containers namespaced to that uid/gid)
 	if config.RemappedRoot != "" {
-		id := idtools.CurrentIdentity()
-		// First make sure the current root dir has the correct perms.
-		if err := idtools.MkdirAllAndChown(config.Root, 0701, id); err != nil {
-			return errors.Wrapf(err, "could not create or set daemon root permissions: %s", config.Root)
-		}
-
 		config.Root = filepath.Join(rootDir, fmt.Sprintf("%d.%d", remappedRoot.UID, remappedRoot.GID))
 		logrus.Debugf("Creating user namespaced daemon root: %s", config.Root)
 		// Create the root directory if it doesn't exist
-		if err := idtools.MkdirAllAndChown(config.Root, 0701, id); err != nil {
+		if err := idtools.MkdirAllAndChown(config.Root, 0710, id); err != nil {
 			return fmt.Errorf("Cannot create daemon root: %s: %v", config.Root, err)
 		}
 		// we also need to verify that any pre-existing directories in the path to
@@ -1735,4 +1744,16 @@ func (daemon *Daemon) RawSysInfo() *sysinfo.SysInfo {
 
 func recursiveUnmount(target string) error {
 	return mount.RecursiveUnmount(target)
+}
+
+func (daemon *Daemon) initLibcontainerd(ctx context.Context) error {
+	var err error
+	daemon.containerd, err = remote.NewClient(
+		ctx,
+		daemon.containerdCli,
+		filepath.Join(daemon.configStore.ExecRoot, "containerd"),
+		daemon.configStore.ContainerdNamespace,
+		daemon,
+	)
+	return err
 }

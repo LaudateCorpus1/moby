@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/docker/docker/daemon/discovery"
 	"github.com/docker/docker/libnetwork/ipamutils"
 	"github.com/docker/docker/opts"
 	"github.com/spf13/pflag"
@@ -35,23 +34,6 @@ func TestDaemonBrokenConfiguration(t *testing.T) {
 	_, err = MergeDaemonConfigurations(&Config{}, nil, configFile)
 	if err == nil {
 		t.Fatalf("expected error, got %v", err)
-	}
-}
-
-func TestParseClusterAdvertiseSettings(t *testing.T) {
-	_, err := ParseClusterAdvertiseSettings("something", "")
-	if err != discovery.ErrDiscoveryDisabled {
-		t.Fatalf("expected discovery disabled error, got %v\n", err)
-	}
-
-	_, err = ParseClusterAdvertiseSettings("", "something")
-	if err == nil {
-		t.Fatalf("expected discovery store error, got %v\n", err)
-	}
-
-	_, err = ParseClusterAdvertiseSettings("etcd", "127.0.0.1:8080")
-	if err != nil {
-		t.Fatal(err)
 	}
 }
 
@@ -447,67 +429,6 @@ func TestValidateConfiguration(t *testing.T) {
 	}
 }
 
-func TestModifiedDiscoverySettings(t *testing.T) {
-	cases := []struct {
-		current  *Config
-		modified *Config
-		expected bool
-	}{
-		{
-			current:  discoveryConfig("foo", "bar", map[string]string{}),
-			modified: discoveryConfig("foo", "bar", map[string]string{}),
-			expected: false,
-		},
-		{
-			current:  discoveryConfig("foo", "bar", map[string]string{"foo": "bar"}),
-			modified: discoveryConfig("foo", "bar", map[string]string{"foo": "bar"}),
-			expected: false,
-		},
-		{
-			current:  discoveryConfig("foo", "bar", map[string]string{}),
-			modified: discoveryConfig("foo", "bar", nil),
-			expected: false,
-		},
-		{
-			current:  discoveryConfig("foo", "bar", nil),
-			modified: discoveryConfig("foo", "bar", map[string]string{}),
-			expected: false,
-		},
-		{
-			current:  discoveryConfig("foo", "bar", nil),
-			modified: discoveryConfig("baz", "bar", nil),
-			expected: true,
-		},
-		{
-			current:  discoveryConfig("foo", "bar", nil),
-			modified: discoveryConfig("foo", "baz", nil),
-			expected: true,
-		},
-		{
-			current:  discoveryConfig("foo", "bar", nil),
-			modified: discoveryConfig("foo", "bar", map[string]string{"foo": "bar"}),
-			expected: true,
-		},
-	}
-
-	for _, c := range cases {
-		got := ModifiedDiscoverySettings(c.current, c.modified.ClusterStore, c.modified.ClusterAdvertise, c.modified.ClusterOpts)
-		if c.expected != got {
-			t.Fatalf("expected %v, got %v: current config %v, new config %v", c.expected, got, c.current, c.modified)
-		}
-	}
-}
-
-func discoveryConfig(backendAddr, advertiseAddr string, opts map[string]string) *Config {
-	return &Config{
-		CommonConfig: CommonConfig{
-			ClusterStore:     backendAddr,
-			ClusterAdvertise: advertiseAddr,
-			ClusterOpts:      opts,
-		},
-	}
-}
-
 // TestReloadSetConfigFileNotExist tests that when `--config-file` is set
 // and it doesn't exist the `Reload` function returns an error.
 func TestReloadSetConfigFileNotExist(t *testing.T) {
@@ -577,4 +498,50 @@ func TestReloadWithDuplicateLabels(t *testing.T) {
 	flags.StringSlice("labels", lbls, "")
 	err := Reload(configFile, flags, func(c *Config) {})
 	assert.Check(t, err)
+}
+
+func TestMaskURLCredentials(t *testing.T) {
+	tests := []struct {
+		rawURL    string
+		maskedURL string
+	}{
+		{
+			rawURL:    "",
+			maskedURL: "",
+		}, {
+			rawURL:    "invalidURL",
+			maskedURL: "invalidURL",
+		}, {
+			rawURL:    "http://proxy.example.com:80/",
+			maskedURL: "http://proxy.example.com:80/",
+		}, {
+			rawURL:    "http://USER:PASSWORD@proxy.example.com:80/",
+			maskedURL: "http://xxxxx:xxxxx@proxy.example.com:80/",
+		}, {
+			rawURL:    "http://PASSWORD:PASSWORD@proxy.example.com:80/",
+			maskedURL: "http://xxxxx:xxxxx@proxy.example.com:80/",
+		}, {
+			rawURL:    "http://USER:@proxy.example.com:80/",
+			maskedURL: "http://xxxxx:xxxxx@proxy.example.com:80/",
+		}, {
+			rawURL:    "http://:PASSWORD@proxy.example.com:80/",
+			maskedURL: "http://xxxxx:xxxxx@proxy.example.com:80/",
+		}, {
+			rawURL:    "http://USER@docker:password@proxy.example.com:80/",
+			maskedURL: "http://xxxxx:xxxxx@proxy.example.com:80/",
+		}, {
+			rawURL:    "http://USER%40docker:password@proxy.example.com:80/",
+			maskedURL: "http://xxxxx:xxxxx@proxy.example.com:80/",
+		}, {
+			rawURL:    "http://USER%40docker:pa%3Fsword@proxy.example.com:80/",
+			maskedURL: "http://xxxxx:xxxxx@proxy.example.com:80/",
+		}, {
+			rawURL:    "http://USER%40docker:pa%3Fsword@proxy.example.com:80/hello%20world",
+			maskedURL: "http://xxxxx:xxxxx@proxy.example.com:80/hello%20world",
+		},
+	}
+	for _, test := range tests {
+		maskedURL := MaskCredentials(test.rawURL)
+		assert.Equal(t, maskedURL, test.maskedURL)
+	}
 }

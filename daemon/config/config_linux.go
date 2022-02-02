@@ -19,6 +19,10 @@ const (
 
 	// DefaultCgroupV1NamespaceMode is the default mode for containers cgroup namespace when using cgroups v1.
 	DefaultCgroupV1NamespaceMode = containertypes.CgroupnsModeHost
+
+	// StockRuntimeName is the reserved name/alias used to represent the
+	// OCI runtime being shipped with the docker daemon package.
+	StockRuntimeName = "runc"
 )
 
 // BridgeConfig stores all the bridge driver specific
@@ -51,7 +55,6 @@ type Config struct {
 
 	// Fields below here are platform specific.
 	Runtimes             map[string]types.Runtime `json:"runtimes,omitempty"`
-	DefaultRuntime       string                   `json:"default-runtime,omitempty"`
 	DefaultInitBinary    string                   `json:"default-init,omitempty"`
 	CgroupParent         string                   `json:"cgroup-parent,omitempty"`
 	EnableSelinuxSupport bool                     `json:"selinux-enabled,omitempty"`
@@ -81,15 +84,6 @@ func (conf *Config) GetRuntime(name string) *types.Runtime {
 		return &rt
 	}
 	return nil
-}
-
-// GetDefaultRuntimeName returns the current default runtime
-func (conf *Config) GetDefaultRuntimeName() string {
-	conf.Lock()
-	rt := conf.DefaultRuntime
-	conf.Unlock()
-
-	return rt
 }
 
 // GetAllRuntimes returns a copy of the runtimes map
@@ -126,9 +120,6 @@ func (conf *Config) GetResolvConf() string {
 
 // IsSwarmCompatible defines if swarm mode can be enabled in this config
 func (conf *Config) IsSwarmCompatible() error {
-	if conf.ClusterStore != "" || conf.ClusterAdvertise != "" {
-		return fmt.Errorf("--cluster-store and --cluster-advertise daemon configurations are incompatible with swarm mode")
-	}
 	if conf.LiveRestoreEnabled {
 		return fmt.Errorf("--live-restore daemon configuration is incompatible with swarm mode")
 	}

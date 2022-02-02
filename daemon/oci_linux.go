@@ -27,7 +27,6 @@ import (
 	"github.com/moby/sys/mount"
 	"github.com/moby/sys/mountinfo"
 	"github.com/opencontainers/runc/libcontainer/cgroups"
-	"github.com/opencontainers/runc/libcontainer/devices"
 	"github.com/opencontainers/runc/libcontainer/user"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/pkg/errors"
@@ -770,7 +769,8 @@ func WithCommonOptions(daemon *Daemon, c *container.Container) coci.SpecOpts {
 		// joining an existing namespace, only if we create a new net namespace.
 		if c.HostConfig.NetworkMode.IsPrivate() {
 			// We cannot set up ping socket support in a user namespace
-			if !c.HostConfig.UsernsMode.IsPrivate() && sysctlExists("net.ipv4.ping_group_range") {
+			userNS := daemon.configStore.RemappedRoot != "" && c.HostConfig.UsernsMode.IsPrivate()
+			if !userNS && !userns.RunningInUserNS() && sysctlExists("net.ipv4.ping_group_range") {
 				// allow unprivileged ICMP echo sockets without CAP_NET_RAW
 				s.Linux.Sysctl["net.ipv4.ping_group_range"] = "0 2147483647"
 			}
@@ -873,13 +873,11 @@ func WithDevices(daemon *Daemon, c *container.Container) coci.SpecOpts {
 		devPermissions := s.Linux.Resources.Devices
 
 		if c.HostConfig.Privileged && !userns.RunningInUserNS() {
-			hostDevices, err := devices.HostDevices()
+			hostDevices, err := coci.HostDevices()
 			if err != nil {
 				return err
 			}
-			for _, d := range hostDevices {
-				devs = append(devs, oci.Device(d))
-			}
+			devs = append(devs, hostDevices...)
 
 			// adding device mappings in privileged containers
 			for _, deviceMapping := range c.HostConfig.Devices {

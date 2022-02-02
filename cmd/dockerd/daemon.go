@@ -80,6 +80,9 @@ func (cli *DaemonCli) start(opts *daemonOptions) (err error) {
 	if cli.Config, err = loadDaemonCliConfig(opts); err != nil {
 		return err
 	}
+	if err := checkDeprecatedOptions(cli.Config); err != nil {
+		return err
+	}
 
 	if opts.Validate {
 		// If config wasn't OK we wouldn't have made it this far.
@@ -87,7 +90,7 @@ func (cli *DaemonCli) start(opts *daemonOptions) (err error) {
 		return nil
 	}
 
-	warnOnDeprecatedConfigOptions(cli.Config)
+	configureProxyEnv(cli.Config)
 
 	if err := configureDaemonLogs(cli.Config); err != nil {
 		return err
@@ -463,16 +466,12 @@ func loadDaemonCliConfig(opts *daemonOptions) (*config.Config, error) {
 	return conf, nil
 }
 
-func warnOnDeprecatedConfigOptions(config *config.Config) {
-	if config.ClusterAdvertise != "" {
-		logrus.Warn(`The "cluster-advertise" option is deprecated. To be removed soon.`)
+func checkDeprecatedOptions(config *config.Config) error {
+	// Overlay networks with external k/v stores have been deprecated
+	if config.ClusterAdvertise != "" || len(config.ClusterOpts) > 0 || config.ClusterStore != "" {
+		return errors.New("Host-discovery and overlay networks with external k/v stores are deprecated. The 'cluster-advertise', 'cluster-store', and 'cluster-store-opt' options have been removed")
 	}
-	if config.ClusterStore != "" {
-		logrus.Warn(`The "cluster-store" option is deprecated. To be removed soon.`)
-	}
-	if len(config.ClusterOpts) > 0 {
-		logrus.Warn(`The "cluster-store-opt" option is deprecated. To be removed soon.`)
-	}
+	return nil
 }
 
 func initRouter(opts routerOptions) {
@@ -778,4 +777,30 @@ func configureDaemonLogs(conf *config.Config) error {
 		FullTimestamp:   true,
 	})
 	return nil
+}
+
+func configureProxyEnv(conf *config.Config) {
+	if p := conf.HTTPProxy; p != "" {
+		overrideProxyEnv("HTTP_PROXY", p)
+		overrideProxyEnv("http_proxy", p)
+	}
+	if p := conf.HTTPSProxy; p != "" {
+		overrideProxyEnv("HTTPS_PROXY", p)
+		overrideProxyEnv("https_proxy", p)
+	}
+	if p := conf.NoProxy; p != "" {
+		overrideProxyEnv("NO_PROXY", p)
+		overrideProxyEnv("no_proxy", p)
+	}
+}
+
+func overrideProxyEnv(name, val string) {
+	if oldVal := os.Getenv(name); oldVal != "" && oldVal != val {
+		logrus.WithFields(logrus.Fields{
+			"name":      name,
+			"old-value": config.MaskCredentials(oldVal),
+			"new-value": config.MaskCredentials(val),
+		}).Warn("overriding existing proxy variable with value from configuration")
+	}
+	_ = os.Setenv(name, val)
 }

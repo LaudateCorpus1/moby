@@ -5,15 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
-	"reflect"
 	"strings"
 	"sync"
 
-	daemondiscovery "github.com/docker/docker/daemon/discovery"
 	"github.com/docker/docker/opts"
 	"github.com/docker/docker/pkg/authorization"
-	"github.com/docker/docker/pkg/discovery"
 	"github.com/docker/docker/registry"
 	"github.com/imdario/mergo"
 	"github.com/pkg/errors"
@@ -48,9 +46,7 @@ const (
 	// DefaultRuntimeBinary is the default runtime to be used by
 	// containerd if none is specified
 	DefaultRuntimeBinary = "runc"
-	// StockRuntimeName is the reserved name/alias used to represent the
-	// OCI runtime being shipped with the docker daemon package.
-	StockRuntimeName = "runc"
+
 	// LinuxV1RuntimeName is the runtime used to specify the containerd v1 shim with the runc binary
 	// Note this is different than io.containerd.runc.v1 which would be the v1 shim using the v2 shim API.
 	// This is specifically for the v1 shim using the v1 shim API.
@@ -167,6 +163,7 @@ type CommonConfig struct {
 	ExecRoot              string                    `json:"exec-root,omitempty"`
 	SocketGroup           string                    `json:"group,omitempty"`
 	CorsHeaders           string                    `json:"api-cors-header,omitempty"`
+	ProxyConfig
 
 	// TrustKeyPath is used to generate the daemon ID and for signing schema 1 manifests
 	// when pushing to a registry which does not support schema 2. This field is marked as
@@ -273,6 +270,15 @@ type CommonConfig struct {
 
 	ContainerdNamespace       string `json:"containerd-namespace,omitempty"`
 	ContainerdPluginNamespace string `json:"containerd-plugin-namespace,omitempty"`
+
+	DefaultRuntime string `json:"default-runtime,omitempty"`
+}
+
+// ProxyConfig holds the proxy-configuration for the daemon.
+type ProxyConfig struct {
+	HTTPProxy  string `json:"http-proxy,omitempty"`
+	HTTPSProxy string `json:"https-proxy,omitempty"`
+	NoProxy    string `json:"no-proxy,omitempty"`
 }
 
 // IsValueSet returns true if a configuration value
@@ -292,25 +298,8 @@ func New() *Config {
 			LogConfig: LogConfig{
 				Config: make(map[string]string),
 			},
-			ClusterOpts: make(map[string]string),
 		},
 	}
-}
-
-// ParseClusterAdvertiseSettings parses the specified advertise settings
-func ParseClusterAdvertiseSettings(clusterStore, clusterAdvertise string) (string, error) {
-	if clusterAdvertise == "" {
-		return "", daemondiscovery.ErrDiscoveryDisabled
-	}
-	if clusterStore == "" {
-		return "", errors.New("invalid cluster configuration. --cluster-advertise must be accompanied by --cluster-store configuration")
-	}
-
-	advertise, err := discovery.ParseAdvertise(clusterAdvertise)
-	if err != nil {
-		return "", errors.Wrap(err, "discovery advertise parsing failed")
-	}
-	return advertise, nil
 }
 
 // GetConflictFreeLabels validates Labels for conflict
@@ -525,6 +514,11 @@ func findConfigurationConflicts(config map[string]interface{}, flags *pflag.Flag
 
 	var conflicts []string
 	printConflict := func(name string, flagValue, fileValue interface{}) string {
+		switch name {
+		case "http-proxy", "https-proxy":
+			flagValue = MaskCredentials(flagValue.(string))
+			fileValue = MaskCredentials(fileValue.(string))
+		}
 		return fmt.Sprintf("%s: (from flag: %v, from file: %v)", name, flagValue, fileValue)
 	}
 
@@ -622,17 +616,21 @@ func ValidateMaxDownloadAttempts(config *Config) error {
 	return nil
 }
 
-// ModifiedDiscoverySettings returns whether the discovery configuration has been modified or not.
-func ModifiedDiscoverySettings(config *Config, backendType, advertise string, clusterOpts map[string]string) bool {
-	if config.ClusterStore != backendType || config.ClusterAdvertise != advertise {
-		return true
-	}
+// GetDefaultRuntimeName returns the current default runtime
+func (conf *Config) GetDefaultRuntimeName() string {
+	conf.Lock()
+	rt := conf.DefaultRuntime
+	conf.Unlock()
 
-	if (config.ClusterOpts == nil && clusterOpts == nil) ||
-		(config.ClusterOpts == nil && len(clusterOpts) == 0) ||
-		(len(config.ClusterOpts) == 0 && clusterOpts == nil) {
-		return false
-	}
+	return rt
+}
 
-	return !reflect.DeepEqual(config.ClusterOpts, clusterOpts)
+// MaskCredentials masks credentials that are in an URL.
+func MaskCredentials(rawURL string) string {
+	parsedURL, err := url.Parse(rawURL)
+	if err != nil || parsedURL.User == nil {
+		return rawURL
+	}
+	parsedURL.User = url.UserPassword("xxxxx", "xxxxx")
+	return parsedURL.String()
 }
