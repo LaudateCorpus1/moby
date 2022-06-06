@@ -559,6 +559,7 @@ func (s *DockerDaemonSuite) TestDaemonAllocatesListeningPort(c *testing.T) {
 func (s *DockerDaemonSuite) TestDaemonKeyGeneration(c *testing.T) {
 	// TODO: skip or update for Windows daemon
 	os.Remove("/etc/docker/key.json")
+	c.Setenv("DOCKER_ALLOW_SCHEMA1_PUSH_DONOTUSE", "1")
 	s.d.Start(c)
 	s.d.Stop(c)
 
@@ -1212,6 +1213,7 @@ func (s *DockerDaemonSuite) TestDaemonWithWrongkey(c *testing.T) {
 	}
 
 	os.Remove("/etc/docker/key.json")
+	c.Setenv("DOCKER_ALLOW_SCHEMA1_PUSH_DONOTUSE", "1")
 	s.d.Start(c)
 	s.d.Stop(c)
 
@@ -1671,22 +1673,6 @@ func (s *DockerDaemonSuite) TestDaemonRestartLocalVolumes(c *testing.T) {
 	assert.NilError(c, err, out)
 }
 
-// FIXME(vdemeester) should be a unit test
-func (s *DockerDaemonSuite) TestDaemonCorruptedLogDriverAddress(c *testing.T) {
-	d := daemon.New(c, dockerBinary, dockerdBinary, testdaemon.WithEnvironment(testEnv.Execution))
-	assert.Assert(c, d.StartWithError("--log-driver=syslog", "--log-opt", "syslog-address=corrupted:42") != nil)
-	expected := "syslog-address should be in form proto://address"
-	icmd.RunCommand("grep", expected, d.LogFileName()).Assert(c, icmd.Success)
-}
-
-// FIXME(vdemeester) should be a unit test
-func (s *DockerDaemonSuite) TestDaemonCorruptedFluentdAddress(c *testing.T) {
-	d := daemon.New(c, dockerBinary, dockerdBinary, testdaemon.WithEnvironment(testEnv.Execution))
-	assert.Assert(c, d.StartWithError("--log-driver=fluentd", "--log-opt", "fluentd-address=corrupted:c") != nil)
-	expected := "invalid fluentd-address corrupted:c: "
-	icmd.RunCommand("grep", expected, d.LogFileName()).Assert(c, icmd.Success)
-}
-
 // FIXME(vdemeester) Use a new daemon instance instead of the Suite one
 func (s *DockerDaemonSuite) TestDaemonStartWithoutHost(c *testing.T) {
 	s.d.UseDefaultHost = true
@@ -1709,12 +1695,7 @@ func (s *DockerDaemonSuite) TestDaemonStartWithDefaultTLSHost(c *testing.T) {
 		"--tlskey", "fixtures/https/server-key.pem")
 
 	// The client with --tlsverify should also use default host localhost:2376
-	tmpHost := os.Getenv("DOCKER_HOST")
-	defer func() {
-		os.Setenv("DOCKER_HOST", tmpHost)
-	}()
-
-	os.Setenv("DOCKER_HOST", "")
+	c.Setenv("DOCKER_HOST", "")
 
 	out, _ := dockerCmd(
 		c,
@@ -2709,14 +2690,14 @@ func (s *DockerDaemonSuite) TestExecWithUserAfterLiveRestore(c *testing.T) {
 
 func (s *DockerDaemonSuite) TestRemoveContainerAfterLiveRestore(c *testing.T) {
 	testRequires(c, DaemonIsLinux, overlayFSSupported, testEnv.IsLocalDaemon)
-	s.d.StartWithBusybox(c, "--live-restore", "--storage-driver", "overlay")
+	s.d.StartWithBusybox(c, "--live-restore", "--storage-driver", "overlay2")
 	out, err := s.d.Cmd("run", "-d", "--name=top", "busybox", "top")
 	assert.NilError(c, err, "Output: %s", out)
 
 	s.d.WaitRun("top")
 
 	// restart daemon.
-	s.d.Restart(c, "--live-restore", "--storage-driver", "overlay")
+	s.d.Restart(c, "--live-restore", "--storage-driver", "overlay2")
 
 	out, err = s.d.Cmd("stop", "top")
 	assert.NilError(c, err, "Output: %s", out)

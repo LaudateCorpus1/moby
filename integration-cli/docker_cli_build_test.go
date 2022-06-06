@@ -25,7 +25,7 @@ import (
 	"github.com/docker/docker/testutil/fakegit"
 	"github.com/docker/docker/testutil/fakestorage"
 	"github.com/moby/buildkit/frontend/dockerfile/command"
-	digest "github.com/opencontainers/go-digest"
+	"github.com/opencontainers/go-digest"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/icmd"
@@ -3814,7 +3814,7 @@ func (s *DockerSuite) TestBuildSpaces(c *testing.T) {
 	e2 := removeLogTimestamps(result2.Error.Error())
 
 	// Ignore whitespace since that's what were verifying doesn't change stuff
-	if strings.Replace(e1, " ", "", -1) != strings.Replace(e2, " ", "", -1) {
+	if strings.ReplaceAll(e1, " ", "") != strings.ReplaceAll(e2, " ", "") {
 		c.Fatalf("Build 2's error wasn't the same as build 1's\n1:%s\n2:%s", result1.Error, result2.Error)
 	}
 
@@ -3829,7 +3829,7 @@ func (s *DockerSuite) TestBuildSpaces(c *testing.T) {
 	e2 = removeLogTimestamps(result2.Error.Error())
 
 	// Ignore whitespace since that's what were verifying doesn't change stuff
-	if strings.Replace(e1, " ", "", -1) != strings.Replace(e2, " ", "", -1) {
+	if strings.ReplaceAll(e1, " ", "") != strings.ReplaceAll(e2, " ", "") {
 		c.Fatalf("Build 3's error wasn't the same as build 1's\n1:%s\n3:%s", result1.Error, result2.Error)
 	}
 
@@ -3844,7 +3844,7 @@ func (s *DockerSuite) TestBuildSpaces(c *testing.T) {
 	e2 = removeLogTimestamps(result2.Error.Error())
 
 	// Ignore whitespace since that's what were verifying doesn't change stuff
-	if strings.Replace(e1, " ", "", -1) != strings.Replace(e2, " ", "", -1) {
+	if strings.ReplaceAll(e1, " ", "") != strings.ReplaceAll(e2, " ", "") {
 		c.Fatalf("Build 4's error wasn't the same as build 1's\n1:%s\n4:%s", result1.Error, result2.Error)
 	}
 
@@ -5009,16 +5009,14 @@ func (s *DockerRegistryAuthHtpasswdSuite) TestBuildFromAuthenticatedRegistry(c *
 }
 
 func (s *DockerRegistryAuthHtpasswdSuite) TestBuildWithExternalAuth(c *testing.T) {
-	osPath := os.Getenv("PATH")
-	defer os.Setenv("PATH", osPath)
-
 	workingDir, err := os.Getwd()
 	assert.NilError(c, err)
 	absolute, err := filepath.Abs(filepath.Join(workingDir, "fixtures", "auth"))
 	assert.NilError(c, err)
-	testPath := fmt.Sprintf("%s%c%s", osPath, filepath.ListSeparator, absolute)
 
-	os.Setenv("PATH", testPath)
+	osPath := os.Getenv("PATH")
+	testPath := fmt.Sprintf("%s%c%s", osPath, filepath.ListSeparator, absolute)
+	c.Setenv("PATH", testPath)
 
 	repoName := fmt.Sprintf("%v/dockercli/busybox:authtest", privateRegistryURL)
 
@@ -6073,7 +6071,7 @@ func (s *DockerSuite) TestBuildLineErrorOnBuild(c *testing.T) {
   ONBUILD
   `)).Assert(c, icmd.Expected{
 		ExitCode: 1,
-		Err:      "parse error line 2: ONBUILD requires at least one argument",
+		Err:      "parse error on line 2: ONBUILD requires at least one argument",
 	})
 }
 
@@ -6087,7 +6085,7 @@ func (s *DockerSuite) TestBuildLineErrorUnknownInstruction(c *testing.T) {
   ERROR
   `)).Assert(c, icmd.Expected{
 		ExitCode: 1,
-		Err:      "parse error line 3: unknown instruction: NOINSTRUCTION",
+		Err:      "parse error on line 3: unknown instruction: NOINSTRUCTION",
 	})
 }
 
@@ -6104,7 +6102,7 @@ func (s *DockerSuite) TestBuildLineErrorWithEmptyLines(c *testing.T) {
   CMD ["/bin/init"]
   `)).Assert(c, icmd.Expected{
 		ExitCode: 1,
-		Err:      "parse error line 6: unknown instruction: NOINSTRUCTION",
+		Err:      "parse error on line 6: unknown instruction: NOINSTRUCTION",
 	})
 }
 
@@ -6118,7 +6116,7 @@ func (s *DockerSuite) TestBuildLineErrorWithComments(c *testing.T) {
   NOINSTRUCTION echo ba
   `)).Assert(c, icmd.Expected{
 		ExitCode: 1,
-		Err:      "parse error line 5: unknown instruction: NOINSTRUCTION",
+		Err:      "parse error on line 5: unknown instruction: NOINSTRUCTION",
 	})
 }
 

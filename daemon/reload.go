@@ -3,6 +3,7 @@ package daemon // import "github.com/docker/docker/daemon"
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 
 	"github.com/docker/docker/daemon/config"
 	"github.com/sirupsen/logrus"
@@ -30,10 +31,10 @@ func (daemon *Daemon) Reload(conf *config.Config) (err error) {
 		if err == nil {
 			jsonString, _ := json.Marshal(&struct {
 				*config.Config
-				config.ProxyConfig
+				config.Proxies `json:"proxies"`
 			}{
 				Config: daemon.configStore,
-				ProxyConfig: config.ProxyConfig{
+				Proxies: config.Proxies{
 					HTTPProxy:  config.MaskCredentials(daemon.configStore.HTTPProxy),
 					HTTPSProxy: config.MaskCredentials(daemon.configStore.HTTPSProxy),
 					NoProxy:    config.MaskCredentials(daemon.configStore.NoProxy),
@@ -56,9 +57,7 @@ func (daemon *Daemon) Reload(conf *config.Config) (err error) {
 	}
 	daemon.reloadDebug(conf, attributes)
 	daemon.reloadMaxConcurrentDownloadsAndUploads(conf, attributes)
-	if err := daemon.reloadMaxDownloadAttempts(conf, attributes); err != nil {
-		return err
-	}
+	daemon.reloadMaxDownloadAttempts(conf, attributes)
 	daemon.reloadShutdownTimeout(conf, attributes)
 	daemon.reloadFeatures(conf, attributes)
 
@@ -88,59 +87,48 @@ func (daemon *Daemon) reloadDebug(conf *config.Config, attributes map[string]str
 		daemon.configStore.Debug = conf.Debug
 	}
 	// prepare reload event attributes with updatable configurations
-	attributes["debug"] = fmt.Sprintf("%t", daemon.configStore.Debug)
+	attributes["debug"] = strconv.FormatBool(daemon.configStore.Debug)
 }
 
 // reloadMaxConcurrentDownloadsAndUploads updates configuration with max concurrent
 // download and upload options and updates the passed attributes
 func (daemon *Daemon) reloadMaxConcurrentDownloadsAndUploads(conf *config.Config, attributes map[string]string) {
-	// If no value is set for max-concurrent-downloads we assume it is the default value
 	// We always "reset" as the cost is lightweight and easy to maintain.
-	maxConcurrentDownloads := config.DefaultMaxConcurrentDownloads
-	if conf.IsValueSet("max-concurrent-downloads") && conf.MaxConcurrentDownloads != nil {
-		maxConcurrentDownloads = *conf.MaxConcurrentDownloads
-	}
-	daemon.configStore.MaxConcurrentDownloads = &maxConcurrentDownloads
-	logrus.Debugf("Reset Max Concurrent Downloads: %d", *daemon.configStore.MaxConcurrentDownloads)
+	daemon.configStore.MaxConcurrentDownloads = config.DefaultMaxConcurrentDownloads
+	daemon.configStore.MaxConcurrentUploads = config.DefaultMaxConcurrentUploads
 
-	// If no value is set for max-concurrent-upload we assume it is the default value
-	// We always "reset" as the cost is lightweight and easy to maintain.
-	maxConcurrentUploads := config.DefaultMaxConcurrentUploads
-	if conf.IsValueSet("max-concurrent-uploads") && conf.MaxConcurrentUploads != nil {
-		maxConcurrentUploads = *conf.MaxConcurrentUploads
+	if conf.IsValueSet("max-concurrent-downloads") && conf.MaxConcurrentDownloads != 0 {
+		daemon.configStore.MaxConcurrentDownloads = conf.MaxConcurrentDownloads
 	}
-	daemon.configStore.MaxConcurrentUploads = &maxConcurrentUploads
-	logrus.Debugf("Reset Max Concurrent Uploads: %d", *daemon.configStore.MaxConcurrentUploads)
-
+	if conf.IsValueSet("max-concurrent-uploads") && conf.MaxConcurrentUploads != 0 {
+		daemon.configStore.MaxConcurrentUploads = conf.MaxConcurrentUploads
+	}
 	if daemon.imageService != nil {
-		daemon.imageService.UpdateConfig(&maxConcurrentDownloads, &maxConcurrentUploads)
+		daemon.imageService.UpdateConfig(
+			daemon.configStore.MaxConcurrentDownloads,
+			daemon.configStore.MaxConcurrentUploads,
+		)
 	}
 
 	// prepare reload event attributes with updatable configurations
-	attributes["max-concurrent-downloads"] = fmt.Sprintf("%d", *daemon.configStore.MaxConcurrentDownloads)
-	// prepare reload event attributes with updatable configurations
-	attributes["max-concurrent-uploads"] = fmt.Sprintf("%d", *daemon.configStore.MaxConcurrentUploads)
+	attributes["max-concurrent-downloads"] = strconv.Itoa(daemon.configStore.MaxConcurrentDownloads)
+	attributes["max-concurrent-uploads"] = strconv.Itoa(daemon.configStore.MaxConcurrentUploads)
+	logrus.Debug("Reset Max Concurrent Downloads: ", attributes["max-concurrent-downloads"])
+	logrus.Debug("Reset Max Concurrent Uploads: ", attributes["max-concurrent-uploads"])
 }
 
 // reloadMaxDownloadAttempts updates configuration with max concurrent
 // download attempts when a connection is lost and updates the passed attributes
-func (daemon *Daemon) reloadMaxDownloadAttempts(conf *config.Config, attributes map[string]string) error {
-	if err := config.ValidateMaxDownloadAttempts(conf); err != nil {
-		return err
-	}
-
-	// If no value is set for max-download-attempts we assume it is the default value
+func (daemon *Daemon) reloadMaxDownloadAttempts(conf *config.Config, attributes map[string]string) {
 	// We always "reset" as the cost is lightweight and easy to maintain.
-	maxDownloadAttempts := config.DefaultDownloadAttempts
-	if conf.IsValueSet("max-download-attempts") && conf.MaxDownloadAttempts != nil {
-		maxDownloadAttempts = *conf.MaxDownloadAttempts
+	daemon.configStore.MaxDownloadAttempts = config.DefaultDownloadAttempts
+	if conf.IsValueSet("max-download-attempts") && conf.MaxDownloadAttempts != 0 {
+		daemon.configStore.MaxDownloadAttempts = conf.MaxDownloadAttempts
 	}
-	daemon.configStore.MaxDownloadAttempts = &maxDownloadAttempts
-	logrus.Debugf("Reset Max Download Attempts: %d", *daemon.configStore.MaxDownloadAttempts)
 
 	// prepare reload event attributes with updatable configurations
-	attributes["max-download-attempts"] = fmt.Sprintf("%d", *daemon.configStore.MaxDownloadAttempts)
-	return nil
+	attributes["max-download-attempts"] = strconv.Itoa(daemon.configStore.MaxDownloadAttempts)
+	logrus.Debug("Reset Max Download Attempts: ", attributes["max-download-attempts"])
 }
 
 // reloadShutdownTimeout updates configuration with daemon shutdown timeout option
@@ -153,7 +141,7 @@ func (daemon *Daemon) reloadShutdownTimeout(conf *config.Config, attributes map[
 	}
 
 	// prepare reload event attributes with updatable configurations
-	attributes["shutdown-timeout"] = fmt.Sprintf("%d", daemon.configStore.ShutdownTimeout)
+	attributes["shutdown-timeout"] = strconv.Itoa(daemon.configStore.ShutdownTimeout)
 }
 
 // reloadLabels updates configuration with engine labels
@@ -184,7 +172,7 @@ func (daemon *Daemon) reloadAllowNondistributableArtifacts(conf *config.Config, 
 	// Update corresponding configuration.
 	if conf.IsValueSet("allow-nondistributable-artifacts") {
 		daemon.configStore.AllowNondistributableArtifacts = conf.AllowNondistributableArtifacts
-		if err := daemon.RegistryService.LoadAllowNondistributableArtifacts(conf.AllowNondistributableArtifacts); err != nil {
+		if err := daemon.registryService.LoadAllowNondistributableArtifacts(conf.AllowNondistributableArtifacts); err != nil {
 			return err
 		}
 	}
@@ -209,7 +197,7 @@ func (daemon *Daemon) reloadInsecureRegistries(conf *config.Config, attributes m
 	// update corresponding configuration
 	if conf.IsValueSet("insecure-registries") {
 		daemon.configStore.InsecureRegistries = conf.InsecureRegistries
-		if err := daemon.RegistryService.LoadInsecureRegistries(conf.InsecureRegistries); err != nil {
+		if err := daemon.registryService.LoadInsecureRegistries(conf.InsecureRegistries); err != nil {
 			return err
 		}
 	}
@@ -234,7 +222,7 @@ func (daemon *Daemon) reloadRegistryMirrors(conf *config.Config, attributes map[
 	// update corresponding configuration
 	if conf.IsValueSet("registry-mirrors") {
 		daemon.configStore.Mirrors = conf.Mirrors
-		if err := daemon.RegistryService.LoadMirrors(conf.Mirrors); err != nil {
+		if err := daemon.registryService.LoadMirrors(conf.Mirrors); err != nil {
 			return err
 		}
 	}
@@ -262,7 +250,7 @@ func (daemon *Daemon) reloadLiveRestore(conf *config.Config, attributes map[stri
 	}
 
 	// prepare reload event attributes with updatable configurations
-	attributes["live-restore"] = fmt.Sprintf("%t", daemon.configStore.LiveRestoreEnabled)
+	attributes["live-restore"] = strconv.FormatBool(daemon.configStore.LiveRestoreEnabled)
 	return nil
 }
 

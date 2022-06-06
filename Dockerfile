@@ -2,11 +2,9 @@
 
 ARG CROSS="false"
 ARG SYSTEMD="false"
-# IMPORTANT: When updating this please note that stdlib archive/tar pkg is vendored
-ARG GO_VERSION=1.17.6
+ARG GO_VERSION=1.18.3
 ARG DEBIAN_FRONTEND=noninteractive
 ARG VPNKIT_VERSION=0.5.0
-ARG DOCKER_BUILDTAGS="apparmor seccomp"
 
 ARG BASE_DEBIAN_DISTRO="bullseye"
 ARG GOLANG_IMAGE="golang:${GO_VERSION}-${BASE_DEBIAN_DISTRO}"
@@ -37,7 +35,7 @@ WORKDIR /go/src/github.com/docker/distribution
 # the version specified here should match a current release.
 ARG REGISTRY_VERSION=v2.3.0
 
-# REGISTRY_VERSION_SCHEMA1 specifies the version of the regsitry to build and
+# REGISTRY_VERSION_SCHEMA1 specifies the version of the registry to build and
 # install from the https://github.com/docker/distribution repository. This is
 # an older (pre v2.3.0) version of the registry that only supports schema1
 # manifests. This version of the registry is not working on arm64, so installation
@@ -132,7 +130,7 @@ RUN --mount=type=cache,sharing=locked,id=moby-cross-false-aptlib,target=/var/lib
 FROM --platform=linux/amd64 runtime-dev-cross-false AS runtime-dev-cross-true
 ARG DEBIAN_FRONTEND
 # These crossbuild packages rely on gcc-<arch>, but this doesn't want to install
-# on non-amd64 systems, so other architectures cannnot crossbuild amd64.
+# on non-amd64 systems, so other architectures cannot crossbuild amd64.
 RUN --mount=type=cache,sharing=locked,id=moby-cross-true-aptlib,target=/var/lib/apt \
     --mount=type=cache,sharing=locked,id=moby-cross-true-aptcache,target=/var/cache/apt \
         apt-get update && apt-get install -y --no-install-recommends \
@@ -149,6 +147,18 @@ RUN --mount=type=cache,sharing=locked,id=moby-cross-true-aptlib,target=/var/lib/
 
 FROM runtime-dev-cross-${CROSS} AS runtime-dev
 
+FROM base AS delve
+# DELVE_VERSION specifies the version of the Delve debugger binary
+# from the https://github.com/go-delve/delve repository.
+# It can be used to run Docker with a possibility of
+# attaching debugger to it.
+#
+ARG DELVE_VERSION=v1.8.1
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+        GOBIN=/build/ GO111MODULE=on go install "github.com/go-delve/delve/cmd/dlv@${DELVE_VERSION}" \
+     && /build/dlv --help
+
 FROM base AS tomll
 # GOTOML_VERSION specifies the version of the tomll binary to build and install
 # from the https://github.com/pelletier/go-toml repository. This binary is used
@@ -161,6 +171,14 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
         GOBIN=/build/ GO111MODULE=on go install "github.com/pelletier/go-toml/cmd/tomll@${GOTOML_VERSION}" \
      && /build/tomll --help
+
+FROM base AS gowinres
+# GOWINRES_VERSION defines go-winres tool version
+ARG GOWINRES_VERSION=v0.2.3
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+        GOBIN=/build/ GO111MODULE=on go install "github.com/tc-hib/go-winres@${GOWINRES_VERSION}" \
+     && /build/go-winres --help
 
 FROM dev-base AS containerd
 ARG DEBIAN_FRONTEND
@@ -175,14 +193,14 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
         PREFIX=/build /install.sh containerd
 
 FROM base AS golangci_lint
-ARG GOLANGCI_LINT_VERSION=v1.23.8
+ARG GOLANGCI_LINT_VERSION=v1.44.0
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
         GOBIN=/build/ GO111MODULE=on go install "github.com/golangci/golangci-lint/cmd/golangci-lint@${GOLANGCI_LINT_VERSION}" \
      && /build/golangci-lint --version
 
 FROM base AS gotestsum
-ARG GOTESTSUM_VERSION=v1.7.0
+ARG GOTESTSUM_VERSION=v1.8.1
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
         GOBIN=/build/ GO111MODULE=on go install "gotest.tools/gotestsum@${GOTESTSUM_VERSION}" \
@@ -301,7 +319,9 @@ RUN pip3 install yamllint==1.26.1
 COPY --from=dockercli     /build/ /usr/local/cli
 COPY --from=frozen-images /build/ /docker-frozen-images
 COPY --from=swagger       /build/ /usr/local/bin/
+COPY --from=delve         /build/ /usr/local/bin/
 COPY --from=tomll         /build/ /usr/local/bin/
+COPY --from=gowinres      /build/ /usr/local/bin/
 COPY --from=tini          /build/ /usr/local/bin/
 COPY --from=registry      /build/ /usr/local/bin/
 COPY --from=criu          /build/ /usr/local/bin/
@@ -347,34 +367,42 @@ ARG PRODUCT
 ENV PRODUCT=${PRODUCT}
 ARG DEFAULT_PRODUCT_LICENSE
 ENV DEFAULT_PRODUCT_LICENSE=${DEFAULT_PRODUCT_LICENSE}
+ARG PACKAGER_NAME
+ENV PACKAGER_NAME=${PACKAGER_NAME}
 ARG DOCKER_BUILDTAGS
 ENV DOCKER_BUILDTAGS="${DOCKER_BUILDTAGS}"
 ENV PREFIX=/build
 # TODO: This is here because hack/make.sh binary copies these extras binaries
 # from $PATH into the bundles dir.
 # It would be nice to handle this in a different way.
-COPY --from=tini        /build/ /usr/local/bin/
-COPY --from=runc        /build/ /usr/local/bin/
-COPY --from=containerd  /build/ /usr/local/bin/
-COPY --from=rootlesskit /build/ /usr/local/bin/
-COPY --from=vpnkit      /build/ /usr/local/bin/
+COPY --from=tini          /build/ /usr/local/bin/
+COPY --from=runc          /build/ /usr/local/bin/
+COPY --from=containerd    /build/ /usr/local/bin/
+COPY --from=rootlesskit   /build/ /usr/local/bin/
+COPY --from=vpnkit        /build/ /usr/local/bin/
+COPY --from=gowinres      /build/ /usr/local/bin/
 WORKDIR /go/src/github.com/docker/docker
 
 FROM binary-base AS build-binary
-RUN --mount=type=cache,target=/root/.cache/go-build \
-    --mount=type=bind,target=/go/src/github.com/docker/docker \
+RUN --mount=type=cache,target=/root/.cache \
+    --mount=type=bind,target=.,ro \
+    --mount=type=tmpfs,target=cli/winresources/dockerd \
+    --mount=type=tmpfs,target=cli/winresources/docker-proxy \
         hack/make.sh binary
 
 FROM binary-base AS build-dynbinary
-RUN --mount=type=cache,target=/root/.cache/go-build \
-    --mount=type=bind,target=/go/src/github.com/docker/docker \
+RUN --mount=type=cache,target=/root/.cache \
+    --mount=type=bind,target=.,ro \
+    --mount=type=tmpfs,target=cli/winresources/dockerd \
+    --mount=type=tmpfs,target=cli/winresources/docker-proxy \
         hack/make.sh dynbinary
 
 FROM binary-base AS build-cross
 ARG DOCKER_CROSSPLATFORMS
-RUN --mount=type=cache,target=/root/.cache/go-build \
-    --mount=type=bind,target=/go/src/github.com/docker/docker \
-    --mount=type=tmpfs,target=/go/src/github.com/docker/docker/autogen \
+RUN --mount=type=cache,target=/root/.cache \
+    --mount=type=bind,target=.,ro \
+    --mount=type=tmpfs,target=cli/winresources/dockerd \
+    --mount=type=tmpfs,target=cli/winresources/docker-proxy \
         hack/make.sh cross
 
 FROM scratch AS binary

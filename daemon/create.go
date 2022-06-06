@@ -22,6 +22,7 @@ import (
 	"github.com/opencontainers/selinux/go-selinux"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
+	archvariant "github.com/tonistiigi/go-archvariant"
 )
 
 type createOpts struct {
@@ -31,7 +32,7 @@ type createOpts struct {
 }
 
 // CreateManagedContainer creates a container that is managed by a Service
-func (daemon *Daemon) CreateManagedContainer(params types.ContainerCreateConfig) (containertypes.ContainerCreateCreatedBody, error) {
+func (daemon *Daemon) CreateManagedContainer(params types.ContainerCreateConfig) (containertypes.CreateResponse, error) {
 	return daemon.containerCreate(createOpts{
 		params:                  params,
 		managed:                 true,
@@ -39,7 +40,7 @@ func (daemon *Daemon) CreateManagedContainer(params types.ContainerCreateConfig)
 }
 
 // ContainerCreate creates a regular container
-func (daemon *Daemon) ContainerCreate(params types.ContainerCreateConfig) (containertypes.ContainerCreateCreatedBody, error) {
+func (daemon *Daemon) ContainerCreate(params types.ContainerCreateConfig) (containertypes.CreateResponse, error) {
 	return daemon.containerCreate(createOpts{
 		params:                  params,
 		managed:                 false,
@@ -48,27 +49,27 @@ func (daemon *Daemon) ContainerCreate(params types.ContainerCreateConfig) (conta
 
 // ContainerCreateIgnoreImagesArgsEscaped creates a regular container. This is called from the builder RUN case
 // and ensures that we do not take the images ArgsEscaped
-func (daemon *Daemon) ContainerCreateIgnoreImagesArgsEscaped(params types.ContainerCreateConfig) (containertypes.ContainerCreateCreatedBody, error) {
+func (daemon *Daemon) ContainerCreateIgnoreImagesArgsEscaped(params types.ContainerCreateConfig) (containertypes.CreateResponse, error) {
 	return daemon.containerCreate(createOpts{
 		params:                  params,
 		managed:                 false,
 		ignoreImagesArgsEscaped: true})
 }
 
-func (daemon *Daemon) containerCreate(opts createOpts) (containertypes.ContainerCreateCreatedBody, error) {
+func (daemon *Daemon) containerCreate(opts createOpts) (containertypes.CreateResponse, error) {
 	start := time.Now()
 	if opts.params.Config == nil {
-		return containertypes.ContainerCreateCreatedBody{}, errdefs.InvalidParameter(errors.New("Config cannot be empty in order to create a container"))
+		return containertypes.CreateResponse{}, errdefs.InvalidParameter(errors.New("Config cannot be empty in order to create a container"))
 	}
 
 	warnings, err := daemon.verifyContainerSettings(opts.params.HostConfig, opts.params.Config, false)
 	if err != nil {
-		return containertypes.ContainerCreateCreatedBody{Warnings: warnings}, errdefs.InvalidParameter(err)
+		return containertypes.CreateResponse{Warnings: warnings}, errdefs.InvalidParameter(err)
 	}
 
 	if opts.params.Platform == nil && opts.params.Config.Image != "" {
 		if img, _ := daemon.imageService.GetImage(opts.params.Config.Image, opts.params.Platform); img != nil {
-			p := platforms.DefaultSpec()
+			p := maximumSpec()
 			imgPlat := v1.Platform{
 				OS:           img.OS,
 				Architecture: img.Architecture,
@@ -83,7 +84,7 @@ func (daemon *Daemon) containerCreate(opts createOpts) (containertypes.Container
 
 	err = verifyNetworkingConfig(opts.params.NetworkingConfig)
 	if err != nil {
-		return containertypes.ContainerCreateCreatedBody{Warnings: warnings}, errdefs.InvalidParameter(err)
+		return containertypes.CreateResponse{Warnings: warnings}, errdefs.InvalidParameter(err)
 	}
 
 	if opts.params.HostConfig == nil {
@@ -91,12 +92,12 @@ func (daemon *Daemon) containerCreate(opts createOpts) (containertypes.Container
 	}
 	err = daemon.adaptContainerSettings(opts.params.HostConfig, opts.params.AdjustCPUShares)
 	if err != nil {
-		return containertypes.ContainerCreateCreatedBody{Warnings: warnings}, errdefs.InvalidParameter(err)
+		return containertypes.CreateResponse{Warnings: warnings}, errdefs.InvalidParameter(err)
 	}
 
 	ctr, err := daemon.create(opts)
 	if err != nil {
-		return containertypes.ContainerCreateCreatedBody{Warnings: warnings}, err
+		return containertypes.CreateResponse{Warnings: warnings}, err
 	}
 	containerActions.WithValues("create").UpdateSince(start)
 
@@ -104,7 +105,7 @@ func (daemon *Daemon) containerCreate(opts createOpts) (containertypes.Container
 		warnings = make([]string, 0) // Create an empty slice to avoid https://github.com/moby/moby/issues/38222
 	}
 
-	return containertypes.ContainerCreateCreatedBody{ID: ctr.ID, Warnings: warnings}, nil
+	return containertypes.CreateResponse{ID: ctr.ID, Warnings: warnings}, nil
 }
 
 // Create creates a new container from the given configuration with a given name.
@@ -123,10 +124,10 @@ func (daemon *Daemon) create(opts createOpts) (retC *container.Container, retErr
 			return nil, err
 		}
 		os = img.OperatingSystem()
-		imgID = img.ID()
 		if !system.IsOSSupported(os) {
-			return nil, errors.New("operating system on which parent image was created is not Windows")
+			return nil, system.ErrNotSupportedOperatingSystem
 		}
+		imgID = img.ID()
 	} else if isWindows {
 		os = "linux" // 'scratch' case.
 	}
@@ -152,8 +153,12 @@ func (daemon *Daemon) create(opts createOpts) (retC *container.Container, retErr
 	}
 	defer func() {
 		if retErr != nil {
-			if err := daemon.cleanupContainer(ctr, true, true); err != nil {
-				logrus.Errorf("failed to cleanup container on create error: %v", err)
+			err = daemon.cleanupContainer(ctr, types.ContainerRmConfig{
+				ForceRemove:  true,
+				RemoveVolume: true,
+			})
+			if err != nil {
+				logrus.WithError(err).Error("failed to cleanup container on create error")
 			}
 		}
 	}()
@@ -318,4 +323,13 @@ func verifyNetworkingConfig(nwConfig *networktypes.NetworkingConfig) error {
 		}
 	}
 	return nil
+}
+
+// maximumSpec returns the distribution platform with maximum compatibility for the current node.
+func maximumSpec() v1.Platform {
+	p := platforms.DefaultSpec()
+	if p.Architecture == "amd64" {
+		p.Variant = archvariant.AMD64Variant()
+	}
+	return p
 }

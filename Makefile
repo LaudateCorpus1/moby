@@ -1,6 +1,6 @@
 .PHONY: all binary dynbinary build cross help install manpages run shell test test-docker-py test-integration test-unit validate win
 
-BUILDX_VERSION ?= v0.6.0
+BUILDX_VERSION ?= v0.8.2
 
 ifdef USE_BUILDX
 BUILDX ?= $(shell command -v buildx)
@@ -68,6 +68,7 @@ DOCKER_ENVS := \
 	-e DOCKER_TEST_HOST \
 	-e DOCKER_USERLANDPROXY \
 	-e DOCKERD_ARGS \
+	-e DELVE_PORT \
 	-e TEST_FORCE_VALIDATE \
 	-e TEST_INTEGRATION_DIR \
 	-e TEST_SKIP_INTEGRATION \
@@ -85,7 +86,8 @@ DOCKER_ENVS := \
 	-e VERSION \
 	-e PLATFORM \
 	-e DEFAULT_PRODUCT_LICENSE \
-	-e PRODUCT
+	-e PRODUCT \
+	-e PACKAGER_NAME
 # note: we _cannot_ add "-e DOCKER_BUILDTAGS" here because even if it's unset in the shell, that would shadow the "ENV DOCKER_BUILDTAGS" set in our Dockerfile, which is very important for our official builds
 
 # to allow `make BIND_DIR=. shell` or `make BIND_DIR= test`
@@ -114,8 +116,9 @@ DOCKER_CONTAINER_NAME := $(if $(CONTAINER_NAME),--name $(CONTAINER_NAME),)
 
 DOCKER_IMAGE := docker-dev
 DOCKER_PORT_FORWARD := $(if $(DOCKER_PORT),-p "$(DOCKER_PORT)",)
+DELVE_PORT_FORWARD := $(if $(DELVE_PORT),-p "$(DELVE_PORT)",)
 
-DOCKER_FLAGS := $(DOCKER) run --rm -i --privileged $(DOCKER_CONTAINER_NAME) $(DOCKER_ENVS) $(DOCKER_MOUNT) $(DOCKER_PORT_FORWARD)
+DOCKER_FLAGS := $(DOCKER) run --rm -i --privileged $(DOCKER_CONTAINER_NAME) $(DOCKER_ENVS) $(DOCKER_MOUNT) $(DOCKER_PORT_FORWARD) $(DELVE_PORT_FORWARD)
 BUILD_APT_MIRROR := $(if $(DOCKER_BUILD_APT_MIRROR),--build-arg APT_MIRROR=$(DOCKER_BUILD_APT_MIRROR))
 export BUILD_APT_MIRROR
 
@@ -158,28 +161,21 @@ ifdef DOCKER_CROSSPLATFORMS
 BUILD_CROSS = --build-arg CROSS=true
 endif
 
-VERSION_AUTOGEN_ARGS = --build-arg VERSION --build-arg DOCKER_GITCOMMIT --build-arg PRODUCT --build-arg PLATFORM --build-arg DEFAULT_PRODUCT_LICENSE
+VERSION_AUTOGEN_ARGS = --build-arg VERSION --build-arg DOCKER_GITCOMMIT --build-arg PRODUCT --build-arg PLATFORM --build-arg DEFAULT_PRODUCT_LICENSE --build-arg PACKAGER_NAME
 
 default: binary
 
 all: build ## validate all checks, build linux binaries, run all tests,\ncross build non-linux binaries, and generate archives
 	$(DOCKER_RUN_DOCKER) bash -c 'hack/validate/default && hack/make.sh'
 
-# This is only used to work around read-only bind mounts of the source code into
-# binary build targets. We end up mounting a tmpfs over autogen which allows us
-# to write build-time generated assets even though the source is mounted read-only
-# ...But in order to do so, this dir needs to already exist.
-autogen:
-	mkdir -p autogen
-
-binary: buildx autogen ## build statically linked linux binaries
+binary: buildx ## build statically linked linux binaries
 	$(BUILD_CMD) $(BUILD_OPTS) --output=bundles/ --target=$@ $(VERSION_AUTOGEN_ARGS) .
 
-dynbinary: buildx autogen ## build dynamically linked linux binaries
+dynbinary: buildx ## build dynamically linked linux binaries
 	$(BUILD_CMD) $(BUILD_OPTS) --output=bundles/ --target=$@ $(VERSION_AUTOGEN_ARGS) .
 
 cross: BUILD_OPTS += --build-arg CROSS=true --build-arg DOCKER_CROSSPLATFORMS
-cross: buildx autogen ## cross build the binaries for darwin, freebsd and\nwindows
+cross: buildx ## cross build the binaries for darwin, freebsd and\nwindows
 	$(BUILD_CMD) $(BUILD_OPTS) --output=bundles/ --target=$@ $(VERSION_AUTOGEN_ARGS) .
 
 bundles:

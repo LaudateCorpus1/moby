@@ -5,9 +5,9 @@ import (
 	"path"
 	"strings"
 
+	"github.com/containerd/cgroups"
 	cgroupsV2 "github.com/containerd/cgroups/v2"
 	"github.com/containerd/containerd/pkg/userns"
-	"github.com/opencontainers/runc/libcontainer/cgroups"
 	"github.com/sirupsen/logrus"
 )
 
@@ -56,12 +56,11 @@ func newV2(options ...Opt) *SysInfo {
 }
 
 func getSwapLimitV2() bool {
-	groups, err := cgroups.ParseCgroupFile("/proc/self/cgroup")
+	_, g, err := cgroups.ParseCgroupFileUnified("/proc/self/cgroup")
 	if err != nil {
 		return false
 	}
 
-	g := groups[""]
 	if g == "" {
 		return false
 	}

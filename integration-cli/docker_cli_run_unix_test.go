@@ -243,8 +243,6 @@ func (s *DockerSuite) TestRunAttachDetachFromConfig(c *testing.T) {
 	keyA := []byte{97}
 
 	// Setup config
-	homeKey := homedir.Key()
-	homeVal := homedir.Get()
 	tmpDir, err := os.MkdirTemp("", "fake-home")
 	assert.NilError(c, err)
 	defer os.RemoveAll(tmpDir)
@@ -253,8 +251,7 @@ func (s *DockerSuite) TestRunAttachDetachFromConfig(c *testing.T) {
 	os.Mkdir(dotDocker, 0600)
 	tmpCfg := filepath.Join(dotDocker, "config.json")
 
-	defer func() { os.Setenv(homeKey, homeVal) }()
-	os.Setenv(homeKey, tmpDir)
+	c.Setenv(homedir.Key(), tmpDir)
 
 	data := `{
 		"detachKeys": "ctrl-a,a"
@@ -326,8 +323,6 @@ func (s *DockerSuite) TestRunAttachDetachKeysOverrideConfig(c *testing.T) {
 	keyA := []byte{97}
 
 	// Setup config
-	homeKey := homedir.Key()
-	homeVal := homedir.Get()
 	tmpDir, err := os.MkdirTemp("", "fake-home")
 	assert.NilError(c, err)
 	defer os.RemoveAll(tmpDir)
@@ -336,8 +331,7 @@ func (s *DockerSuite) TestRunAttachDetachKeysOverrideConfig(c *testing.T) {
 	os.Mkdir(dotDocker, 0600)
 	tmpCfg := filepath.Join(dotDocker, "config.json")
 
-	defer func() { os.Setenv(homeKey, homeVal) }()
-	os.Setenv(homeKey, tmpDir)
+	c.Setenv(homedir.Key(), tmpDir)
 
 	data := `{
 		"detachKeys": "ctrl-e,e"
@@ -1221,7 +1215,7 @@ func (s *DockerSuite) TestUserNoEffectiveCapabilitiesSetgid(c *testing.T) {
 // sysctlExists checks if a sysctl exists; runc will error if we add any that do not actually
 // exist, so do not add the default ones if running on an old kernel.
 func sysctlExists(s string) bool {
-	f := filepath.Join("/proc", "sys", strings.Replace(s, ".", "/", -1))
+	f := filepath.Join("/proc", "sys", strings.ReplaceAll(s, ".", "/"))
 	_, err := os.Stat(f)
 	return err == nil
 }

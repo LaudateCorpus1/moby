@@ -1,6 +1,3 @@
-//go:build linux && seccomp
-// +build linux,seccomp
-
 package daemon // import "github.com/docker/docker/daemon"
 
 import (
@@ -26,7 +23,7 @@ func WithSeccomp(daemon *Daemon, c *container.Container) coci.SpecOpts {
 		if c.HostConfig.Privileged {
 			return nil
 		}
-		if !daemon.seccompEnabled {
+		if !daemon.RawSysInfo().Seccomp {
 			if c.SeccompProfile != "" && c.SeccompProfile != dconfig.SeccompProfileDefault {
 				return fmt.Errorf("seccomp is not enabled in your kernel, cannot run a custom seccomp profile")
 			}

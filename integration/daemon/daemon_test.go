@@ -18,8 +18,12 @@ import (
 	"github.com/docker/docker/testutil/daemon"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
-	"gotest.tools/v3/env"
 	"gotest.tools/v3/skip"
+)
+
+const (
+	libtrustKey   = `{"crv":"P-256","d":"dm28PH4Z4EbyUN8L0bPonAciAQa1QJmmyYd876mnypY","kid":"WTJ3:YSIP:CE2E:G6KJ:PSBD:YX2Y:WEYD:M64G:NU2V:XPZV:H2CR:VLUB","kty":"EC","x":"Mh5-JINSjaa_EZdXDttri255Z5fbCEOTQIZjAcScFTk","y":"eUyuAjfxevb07hCCpvi4Zi334Dy4GDWQvEToGEX4exQ"}`
+	libtrustKeyID = "WTJ3:YSIP:CE2E:G6KJ:PSBD:YX2Y:WEYD:M64G:NU2V:XPZV:H2CR:VLUB"
 )
 
 func TestConfigDaemonLibtrustID(t *testing.T) {
@@ -29,16 +33,53 @@ func TestConfigDaemonLibtrustID(t *testing.T) {
 	defer d.Stop(t)
 
 	trustKey := filepath.Join(d.RootDir(), "key.json")
-	err := os.WriteFile(trustKey, []byte(`{"crv":"P-256","d":"dm28PH4Z4EbyUN8L0bPonAciAQa1QJmmyYd876mnypY","kid":"WTJ3:YSIP:CE2E:G6KJ:PSBD:YX2Y:WEYD:M64G:NU2V:XPZV:H2CR:VLUB","kty":"EC","x":"Mh5-JINSjaa_EZdXDttri255Z5fbCEOTQIZjAcScFTk","y":"eUyuAjfxevb07hCCpvi4Zi334Dy4GDWQvEToGEX4exQ"}`), 0644)
+	err := os.WriteFile(trustKey, []byte(libtrustKey), 0644)
 	assert.NilError(t, err)
 
-	config := filepath.Join(d.RootDir(), "daemon.json")
-	err = os.WriteFile(config, []byte(`{"deprecated-key-path": "`+trustKey+`"}`), 0644)
+	cfg := filepath.Join(d.RootDir(), "daemon.json")
+	err = os.WriteFile(cfg, []byte(`{"deprecated-key-path": "`+trustKey+`"}`), 0644)
 	assert.NilError(t, err)
 
-	d.Start(t, "--config-file", config)
+	d.Start(t, "--config-file", cfg)
 	info := d.Info(t)
-	assert.Equal(t, info.ID, "WTJ3:YSIP:CE2E:G6KJ:PSBD:YX2Y:WEYD:M64G:NU2V:XPZV:H2CR:VLUB")
+	assert.Equal(t, info.ID, libtrustKeyID)
+}
+
+func TestConfigDaemonID(t *testing.T) {
+	skip.If(t, runtime.GOOS == "windows")
+
+	d := daemon.New(t)
+	defer d.Stop(t)
+
+	trustKey := filepath.Join(d.RootDir(), "key.json")
+	err := os.WriteFile(trustKey, []byte(libtrustKey), 0644)
+	assert.NilError(t, err)
+
+	cfg := filepath.Join(d.RootDir(), "daemon.json")
+	err = os.WriteFile(cfg, []byte(`{"deprecated-key-path": "`+trustKey+`"}`), 0644)
+	assert.NilError(t, err)
+
+	// Verify that on an installation with a trust-key present, the ID matches
+	// the trust-key ID, and that the ID has been migrated to the engine-id file.
+	d.Start(t, "--config-file", cfg, "--iptables=false")
+	info := d.Info(t)
+	assert.Equal(t, info.ID, libtrustKeyID)
+
+	idFile := filepath.Join(d.RootDir(), "engine-id")
+	id, err := os.ReadFile(idFile)
+	assert.NilError(t, err)
+	assert.Equal(t, string(id), libtrustKeyID)
+	d.Stop(t)
+
+	// Verify that (if present) the engine-id file takes precedence
+	const engineID = "this-is-the-engine-id"
+	err = os.WriteFile(idFile, []byte(engineID), 0600)
+	assert.NilError(t, err)
+
+	d.Start(t, "--config-file", cfg, "--iptables=false")
+	info = d.Info(t)
+	assert.Equal(t, info.ID, engineID)
+	d.Stop(t)
 }
 
 func TestDaemonConfigValidation(t *testing.T) {
@@ -171,9 +212,9 @@ func TestDaemonProxy(t *testing.T) {
 
 	// Configure proxy through env-vars
 	t.Run("environment variables", func(t *testing.T) {
-		defer env.Patch(t, "HTTP_PROXY", proxyServer.URL)()
-		defer env.Patch(t, "HTTPS_PROXY", proxyServer.URL)()
-		defer env.Patch(t, "NO_PROXY", "example.com")()
+		t.Setenv("HTTP_PROXY", proxyServer.URL)
+		t.Setenv("HTTPS_PROXY", proxyServer.URL)
+		t.Setenv("NO_PROXY", "example.com")
 
 		d := daemon.New(t)
 		c := d.NewClientT(t)
@@ -199,12 +240,12 @@ func TestDaemonProxy(t *testing.T) {
 
 	// Configure proxy through command-line flags
 	t.Run("command-line options", func(t *testing.T) {
-		defer env.Patch(t, "HTTP_PROXY", "http://"+userPass+"from-env-http.invalid")()
-		defer env.Patch(t, "http_proxy", "http://"+userPass+"from-env-http.invalid")()
-		defer env.Patch(t, "HTTPS_PROXY", "https://"+userPass+"myuser:mypassword@from-env-https.invalid")()
-		defer env.Patch(t, "https_proxy", "https://"+userPass+"myuser:mypassword@from-env-https.invalid")()
-		defer env.Patch(t, "NO_PROXY", "ignore.invalid")()
-		defer env.Patch(t, "no_proxy", "ignore.invalid")()
+		t.Setenv("HTTP_PROXY", "http://"+userPass+"from-env-http.invalid")
+		t.Setenv("http_proxy", "http://"+userPass+"from-env-http.invalid")
+		t.Setenv("HTTPS_PROXY", "https://"+userPass+"myuser:mypassword@from-env-https.invalid")
+		t.Setenv("https_proxy", "https://"+userPass+"myuser:mypassword@from-env-https.invalid")
+		t.Setenv("NO_PROXY", "ignore.invalid")
+		t.Setenv("no_proxy", "ignore.invalid")
 
 		d := daemon.New(t)
 		d.Start(t, "--http-proxy", proxyServer.URL, "--https-proxy", proxyServer.URL, "--no-proxy", "example.com")
@@ -240,12 +281,12 @@ func TestDaemonProxy(t *testing.T) {
 
 	// Configure proxy through configuration file
 	t.Run("configuration file", func(t *testing.T) {
-		defer env.Patch(t, "HTTP_PROXY", "http://"+userPass+"from-env-http.invalid")()
-		defer env.Patch(t, "http_proxy", "http://"+userPass+"from-env-http.invalid")()
-		defer env.Patch(t, "HTTPS_PROXY", "https://"+userPass+"myuser:mypassword@from-env-https.invalid")()
-		defer env.Patch(t, "https_proxy", "https://"+userPass+"myuser:mypassword@from-env-https.invalid")()
-		defer env.Patch(t, "NO_PROXY", "ignore.invalid")()
-		defer env.Patch(t, "no_proxy", "ignore.invalid")()
+		t.Setenv("HTTP_PROXY", "http://"+userPass+"from-env-http.invalid")
+		t.Setenv("http_proxy", "http://"+userPass+"from-env-http.invalid")
+		t.Setenv("HTTPS_PROXY", "https://"+userPass+"myuser:mypassword@from-env-https.invalid")
+		t.Setenv("https_proxy", "https://"+userPass+"myuser:mypassword@from-env-https.invalid")
+		t.Setenv("NO_PROXY", "ignore.invalid")
+		t.Setenv("no_proxy", "ignore.invalid")
 
 		d := daemon.New(t)
 		c := d.NewClientT(t)
@@ -253,7 +294,7 @@ func TestDaemonProxy(t *testing.T) {
 		ctx := context.Background()
 
 		configFile := filepath.Join(d.RootDir(), "daemon.json")
-		configJSON := fmt.Sprintf(`{"http-proxy":%[1]q, "https-proxy": %[1]q, "no-proxy": "example.com"}`, proxyServer.URL)
+		configJSON := fmt.Sprintf(`{"proxies":{"http-proxy":%[1]q, "https-proxy": %[1]q, "no-proxy": "example.com"}}`, proxyServer.URL)
 		assert.NilError(t, os.WriteFile(configFile, []byte(configJSON), 0644))
 
 		d.Start(t, "--config-file", configFile)
@@ -293,7 +334,7 @@ func TestDaemonProxy(t *testing.T) {
 		d := daemon.New(t)
 
 		configFile := filepath.Join(d.RootDir(), "daemon.json")
-		configJSON := fmt.Sprintf(`{"http-proxy":%[1]q, "https-proxy": %[1]q, "no-proxy": "example.com"}`, proxyRawURL)
+		configJSON := fmt.Sprintf(`{"proxies":{"http-proxy":%[1]q, "https-proxy": %[1]q, "no-proxy": "example.com"}}`, proxyRawURL)
 		assert.NilError(t, os.WriteFile(configFile, []byte(configJSON), 0644))
 
 		err := d.StartWithError("--http-proxy", proxyRawURL, "--https-proxy", proxyRawURL, "--no-proxy", "example.com", "--config-file", configFile, "--validate")

@@ -58,7 +58,7 @@ func TestDaemonReloadAllowNondistributableArtifacts(t *testing.T) {
 
 	var err error
 	// Initialize daemon with some registries.
-	daemon.RegistryService, err = registry.NewService(registry.ServiceOptions{
+	daemon.registryService, err = registry.NewService(registry.ServiceOptions{
 		AllowNondistributableArtifacts: []string{
 			"127.0.0.0/8",
 			"10.10.1.11:5000",
@@ -95,7 +95,7 @@ func TestDaemonReloadAllowNondistributableArtifacts(t *testing.T) {
 	}
 
 	var actual []string
-	serviceConfig := daemon.RegistryService.ServiceConfig()
+	serviceConfig := daemon.registryService.ServiceConfig()
 	for _, value := range serviceConfig.AllowNondistributableArtifactsCIDRs {
 		actual = append(actual, value.String())
 	}
@@ -113,7 +113,7 @@ func TestDaemonReloadMirrors(t *testing.T) {
 	muteLogs()
 
 	var err error
-	daemon.RegistryService, err = registry.NewService(registry.ServiceOptions{
+	daemon.registryService, err = registry.NewService(registry.ServiceOptions{
 		InsecureRegistries: []string{},
 		Mirrors: []string{
 			"https://mirror.test1.example.com",
@@ -180,7 +180,7 @@ func TestDaemonReloadMirrors(t *testing.T) {
 				// mirrors should be valid, should be no error
 				t.Fatal(err)
 			}
-			registryService := daemon.RegistryService.ServiceConfig()
+			registryService := daemon.registryService.ServiceConfig()
 
 			if len(registryService.Mirrors) != len(value.after) {
 				t.Fatalf("Expected %d daemon mirrors %s while get %d with %s",
@@ -215,7 +215,7 @@ func TestDaemonReloadInsecureRegistries(t *testing.T) {
 
 	var err error
 	// initialize daemon with existing insecure registries: "127.0.0.0/8", "10.10.1.11:5000", "10.10.1.22:5000"
-	daemon.RegistryService, err = registry.NewService(registry.ServiceOptions{
+	daemon.registryService, err = registry.NewService(registry.ServiceOptions{
 		InsecureRegistries: []string{
 			"127.0.0.0/8",
 			"10.10.1.11:5000",
@@ -256,7 +256,7 @@ func TestDaemonReloadInsecureRegistries(t *testing.T) {
 
 	// After Reload, daemon.RegistryService will be changed which is useful
 	// for registry communication in daemon.
-	registries := daemon.RegistryService.ServiceConfig()
+	registries := daemon.registryService.ServiceConfig()
 
 	// After Reload(), newConfig has come to registries.InsecureRegistryCIDRs and registries.IndexConfigs in daemon.
 	// Then collect registries.InsecureRegistryCIDRs in dataMap.
@@ -343,22 +343,19 @@ func TestDaemonReloadNetworkDiagnosticPort(t *testing.T) {
 	}
 	daemon := &Daemon{
 		imageService: images.NewImageService(images.ImageServiceConfig{}),
+		configStore:  &config.Config{},
 	}
-	daemon.configStore = &config.Config{}
 
-	valuesSet := make(map[string]interface{})
-	valuesSet["network-diagnostic-port"] = 2000
 	enableConfig := &config.Config{
 		CommonConfig: config.CommonConfig{
 			NetworkDiagnosticPort: 2000,
-			ValuesSet:             valuesSet,
+			ValuesSet: map[string]interface{}{
+				"network-diagnostic-port": 2000,
+			},
 		},
 	}
-	disableConfig := &config.Config{
-		CommonConfig: config.CommonConfig{},
-	}
 
-	netOptions, err := daemon.networkOptions(enableConfig, nil, nil)
+	netOptions, err := daemon.networkOptions(nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -376,16 +373,16 @@ func TestDaemonReloadNetworkDiagnosticPort(t *testing.T) {
 		}
 		// Check that the diagnostic is enabled
 		if !daemon.netController.IsDiagnosticEnabled() {
-			t.Fatalf("diagnostic should be enable")
+			t.Fatalf("diagnostic should be enabled")
 		}
 
 		// Reload
-		if err := daemon.Reload(disableConfig); err != nil {
+		if err := daemon.Reload(&config.Config{}); err != nil {
 			t.Fatal(err)
 		}
 		// Check that the diagnostic is disabled
 		if daemon.netController.IsDiagnosticEnabled() {
-			t.Fatalf("diagnostic should be disable")
+			t.Fatalf("diagnostic should be disabled")
 		}
 	}
 

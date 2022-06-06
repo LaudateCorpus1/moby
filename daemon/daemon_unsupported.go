@@ -13,7 +13,6 @@ const platformSupported = false
 func setupResolvConf(config *config.Config) {
 }
 
-// RawSysInfo returns *sysinfo.SysInfo .
-func (daemon *Daemon) RawSysInfo() *sysinfo.SysInfo {
+func getSysInfo(daemon *Daemon) *sysinfo.SysInfo {
 	return sysinfo.New()
 }

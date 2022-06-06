@@ -55,8 +55,8 @@ import (
 	executorpkg "github.com/docker/docker/daemon/cluster/executor"
 	lncluster "github.com/docker/docker/libnetwork/cluster"
 	"github.com/docker/docker/pkg/stack"
-	swarmapi "github.com/docker/swarmkit/api"
-	swarmnode "github.com/docker/swarmkit/node"
+	swarmapi "github.com/moby/swarmkit/v2/api"
+	swarmnode "github.com/moby/swarmkit/v2/node"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
@@ -68,7 +68,7 @@ const (
 	swarmConnectTimeout            = 20 * time.Second
 	swarmRequestTimeout            = 20 * time.Second
 	stateFile                      = "docker-state.json"
-	defaultAddr                    = "0.0.0.0:2377"
+	defaultAddr                    = "tcp://0.0.0.0:2377"
 	isWindows                      = runtime.GOOS == "windows"
 	initialReconnectDelay          = 100 * time.Millisecond
 	maxReconnectDelay              = 30 * time.Second
