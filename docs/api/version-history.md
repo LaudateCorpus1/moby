@@ -13,6 +13,12 @@ keywords: "API, Docker, rcli, REST, documentation"
      will be rejected.
 -->
 
+## v1.43 API changes
+
+[Docker Engine API v1.43](https://docs.docker.com/engine/api/v1.43/) documentation
+
+* TODO add API changes for v1.43 here when they arrive.
+
 ## v1.42 API changes
 
 [Docker Engine API v1.42](https://docs.docker.com/engine/api/v1.42/) documentation
@@ -101,6 +107,8 @@ keywords: "API, Docker, rcli, REST, documentation"
   created if missing. This brings parity with `Binds`
 * `POST /containers/create` rejects request if BindOptions|VolumeOptions|TmpfsOptions
   is set with a non-matching mount Type.
+* `POST /containers/{id}/exec` now accepts an optional `ConsoleSize` parameter.
+  It allows to set the console size of the executed process immediately when it's created.
 
 ## v1.41 API changes
 

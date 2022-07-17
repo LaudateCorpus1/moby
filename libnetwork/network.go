@@ -978,13 +978,13 @@ func (n *network) Delete(options ...NetworkDeleteOption) error {
 }
 
 // This function gets called in 3 ways:
-//  * Delete() -- (false, false)
-//      remove if endpoint count == 0 or endpoint count == 1 and
-//      there is a load balancer IP
-//  * Delete(libnetwork.NetworkDeleteOptionRemoveLB) -- (false, true)
-//      remove load balancer and network if endpoint count == 1
-//  * controller.networkCleanup() -- (true, true)
-//      remove the network no matter what
+//   - Delete() -- (false, false)
+//     remove if endpoint count == 0 or endpoint count == 1 and
+//     there is a load balancer IP
+//   - Delete(libnetwork.NetworkDeleteOptionRemoveLB) -- (false, true)
+//     remove load balancer and network if endpoint count == 1
+//   - controller.networkCleanup() -- (true, true)
+//     remove the network no matter what
 func (n *network) delete(force bool, rmLBEndpoint bool) error {
 	n.Lock()
 	c := n.ctrlr
@@ -993,7 +993,7 @@ func (n *network) delete(force bool, rmLBEndpoint bool) error {
 	n.Unlock()
 
 	c.networkLocker.Lock(id)
-	defer c.networkLocker.Unlock(id) // nolint:errcheck
+	defer c.networkLocker.Unlock(id) //nolint:errcheck
 
 	n, err := c.getNetworkFromStore(id)
 	if err != nil {
@@ -1027,7 +1027,7 @@ func (n *network) delete(force bool, rmLBEndpoint bool) error {
 			// continue deletion when force is true even on error
 			logrus.Warnf("Error deleting load balancer sandbox: %v", err)
 		}
-		//Reload the network from the store to update the epcnt.
+		// Reload the network from the store to update the epcnt.
 		n, err = c.getNetworkFromStore(id)
 		if err != nil {
 			return &UnknownNetworkError{name: name, id: id}
@@ -1165,7 +1165,7 @@ func (n *network) CreateEndpoint(name string, options ...EndpointOption) (Endpoi
 	}
 
 	n.ctrlr.networkLocker.Lock(n.id)
-	defer n.ctrlr.networkLocker.Unlock(n.id) // nolint:errcheck
+	defer n.ctrlr.networkLocker.Unlock(n.id) //nolint:errcheck
 
 	return n.createEndpoint(name, options...)
 

@@ -727,10 +727,6 @@ func verifyPlatformContainerSettings(daemon *Daemon, hostConfig *containertypes.
 		}
 	}
 
-	if hostConfig.Runtime == config.LinuxV1RuntimeName || (hostConfig.Runtime == "" && daemon.configStore.DefaultRuntime == config.LinuxV1RuntimeName) {
-		warnings = append(warnings, fmt.Sprintf("Configured runtime %q is deprecated and will be removed in the next release.", config.LinuxV1RuntimeName))
-	}
-
 	return warnings, nil
 }
 
@@ -769,9 +765,6 @@ func verifyDaemonSettings(conf *config.Config) error {
 	if rtName := conf.GetDefaultRuntimeName(); rtName != "" {
 		if conf.GetRuntime(rtName) == nil {
 			return fmt.Errorf("specified default runtime '%s' does not exist", rtName)
-		}
-		if rtName == config.LinuxV1RuntimeName {
-			logrus.Warnf("Configured default runtime %q is deprecated and will be removed in the next release.", config.LinuxV1RuntimeName)
 		}
 	}
 	return nil
@@ -1084,15 +1077,16 @@ func setupInitLayer(idMapping idtools.IdentityMapping) func(containerfs.Containe
 }
 
 // Parse the remapped root (user namespace) option, which can be one of:
-//   username            - valid username from /etc/passwd
-//   username:groupname  - valid username; valid groupname from /etc/group
-//   uid                 - 32-bit unsigned int valid Linux UID value
-//   uid:gid             - uid value; 32-bit unsigned int Linux GID value
 //
-//  If no groupname is specified, and a username is specified, an attempt
-//  will be made to lookup a gid for that username as a groupname
+// - username            - valid username from /etc/passwd
+// - username:groupname  - valid username; valid groupname from /etc/group
+// - uid                 - 32-bit unsigned int valid Linux UID value
+// - uid:gid             - uid value; 32-bit unsigned int Linux GID value
 //
-//  If names are used, they are verified to exist in passwd/group
+// If no groupname is specified, and a username is specified, an attempt
+// will be made to lookup a gid for that username as a groupname
+//
+// If names are used, they are verified to exist in passwd/group
 func parseRemappedRoot(usergrp string) (string, string, error) {
 
 	var (

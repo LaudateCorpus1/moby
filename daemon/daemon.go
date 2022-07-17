@@ -28,6 +28,7 @@ import (
 	"github.com/docker/docker/builder"
 	"github.com/docker/docker/container"
 	"github.com/docker/docker/daemon/config"
+	ctrd "github.com/docker/docker/daemon/containerd"
 	"github.com/docker/docker/daemon/events"
 	"github.com/docker/docker/daemon/exec"
 	_ "github.com/docker/docker/daemon/graphdriver/register" // register graph drivers
@@ -49,7 +50,6 @@ import (
 	"github.com/docker/docker/pkg/plugingetter"
 	"github.com/docker/docker/pkg/sysinfo"
 	"github.com/docker/docker/pkg/system"
-	"github.com/docker/docker/pkg/truncindex"
 	"github.com/docker/docker/plugin"
 	pluginexec "github.com/docker/docker/plugin/executor/containerd"
 	refstore "github.com/docker/docker/reference"
@@ -69,10 +69,6 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-var (
-	errSystemNotSupported = errors.New("the Docker daemon is not supported on this platform")
-)
-
 // Daemon holds information about the Docker daemon.
 type Daemon struct {
 	id                    string
@@ -80,8 +76,7 @@ type Daemon struct {
 	containers            container.Store
 	containersReplica     container.ViewDB
 	execCommands          *exec.Store
-	imageService          *images.ImageService
-	idIndex               *truncindex.TruncIndex
+	imageService          ImageService
 	configStore           *config.Config
 	statsCollector        *stats.Collector
 	defaultLogConfig      containertypes.LogConfig
@@ -105,6 +100,7 @@ type Daemon struct {
 	cluster               Cluster
 	genericResources      []swarm.GenericResource
 	metricsPluginListener net.Listener
+	ReferenceStore        refstore.Store
 
 	machineMemory uint64
 
@@ -144,6 +140,16 @@ func (daemon *Daemon) HasExperimental() bool {
 // Features returns the features map from configStore
 func (daemon *Daemon) Features() *map[string]bool {
 	return &daemon.configStore.Features
+}
+
+// UsesSnapshotter returns true if feature flag to use containerd snapshotter is enabled
+func (daemon *Daemon) UsesSnapshotter() bool {
+	if daemon.configStore.Features != nil {
+		if b, ok := daemon.configStore.Features["containerd-snapshotter"]; ok {
+			return b
+		}
+	}
+	return false
 }
 
 // RegistryHosts returns registry configuration in containerd resolvers format
@@ -702,7 +708,10 @@ func (daemon *Daemon) IsSwarmCompatible() error {
 // NewDaemon sets up everything for the daemon to be able to service
 // requests from the webserver.
 func NewDaemon(ctx context.Context, config *config.Config, pluginStore *plugin.Store) (daemon *Daemon, err error) {
-	setDefaultMtu(config)
+	// Verify the platform is supported as a daemon
+	if !platformSupported {
+		return nil, errors.New("the Docker daemon is not supported on this platform")
+	}
 
 	registryService, err := registry.NewService(config.ServiceOptions)
 	if err != nil {
@@ -724,11 +733,6 @@ func NewDaemon(ctx context.Context, config *config.Config, pluginStore *plugin.S
 
 	// Setup the resolv.conf
 	setupResolvConf(config)
-
-	// Verify the platform is supported as a daemon
-	if !platformSupported {
-		return nil, errSystemNotSupported
-	}
 
 	// Validate platform-specific requirements
 	if err := checkSystem(); err != nil {
@@ -961,15 +965,6 @@ func NewDaemon(ctx context.Context, config *config.Config, pluginStore *plugin.S
 	}
 
 	imageRoot := filepath.Join(config.Root, "image", d.graphDriver)
-	ifs, err := image.NewFSStoreBackend(filepath.Join(imageRoot, "imagedb"))
-	if err != nil {
-		return nil, err
-	}
-
-	imageStore, err := image.NewImageStore(ifs, layerStore)
-	if err != nil {
-		return nil, err
-	}
 
 	d.volumes, err = volumesservice.NewVolumeService(config.Root, d.PluginStore, rootIDs, d)
 	if err != nil {
@@ -999,11 +994,7 @@ func NewDaemon(ctx context.Context, config *config.Config, pluginStore *plugin.S
 	if err != nil {
 		return nil, fmt.Errorf("Couldn't create reference store repository: %s", err)
 	}
-
-	distributionMetadataStore, err := dmetadata.NewFSMetadataStore(filepath.Join(imageRoot, "distribution"))
-	if err != nil {
-		return nil, err
-	}
+	d.ReferenceStore = rs
 
 	// Check if Devices cgroup is mounted, it is hard requirement for container security,
 	// on Linux.
@@ -1027,7 +1018,6 @@ func NewDaemon(ctx context.Context, config *config.Config, pluginStore *plugin.S
 		return nil, err
 	}
 	d.execCommands = exec.NewStore()
-	d.idIndex = truncindex.NewTruncIndex([]string{})
 	d.statsCollector = d.newStatsCollector(1 * time.Second)
 
 	d.EventsService = events.New()
@@ -1036,55 +1026,75 @@ func NewDaemon(ctx context.Context, config *config.Config, pluginStore *plugin.S
 
 	d.linkIndex = newLinkIndex()
 
-	imgSvcConfig := images.ImageServiceConfig{
-		ContainerStore:            d.containers,
-		DistributionMetadataStore: distributionMetadataStore,
-		EventsService:             d.EventsService,
-		ImageStore:                imageStore,
-		LayerStore:                layerStore,
-		MaxConcurrentDownloads:    config.MaxConcurrentDownloads,
-		MaxConcurrentUploads:      config.MaxConcurrentUploads,
-		MaxDownloadAttempts:       config.MaxDownloadAttempts,
-		ReferenceStore:            rs,
-		RegistryService:           registryService,
-		ContentNamespace:          config.ContainerdNamespace,
-	}
-
-	// This is a temporary environment variables used in CI to allow pushing
-	// manifest v2 schema 1 images to test-registries used for testing *pulling*
-	// these images.
-	if os.Getenv("DOCKER_ALLOW_SCHEMA1_PUSH_DONOTUSE") != "" {
-		imgSvcConfig.TrustKey, err = loadOrCreateTrustKey(config.TrustKeyPath)
-		if err != nil {
-			return nil, err
-		}
-		if err = system.MkdirAll(filepath.Join(config.Root, "trust"), 0700); err != nil {
-			return nil, err
-		}
-	}
-
-	// containerd is not currently supported with Windows.
-	// So sometimes d.containerdCli will be nil
-	// In that case we'll create a local content store... but otherwise we'll use containerd
-	if d.containerdCli != nil {
-		imgSvcConfig.Leases = d.containerdCli.LeasesService()
-		imgSvcConfig.ContentStore = d.containerdCli.ContentStore()
+	if d.UsesSnapshotter() {
+		d.imageService = ctrd.NewService(d.containerdCli)
 	} else {
-		cs, lm, err := d.configureLocalContentStore()
+		ifs, err := image.NewFSStoreBackend(filepath.Join(imageRoot, "imagedb"))
 		if err != nil {
 			return nil, err
 		}
-		imgSvcConfig.ContentStore = cs
-		imgSvcConfig.Leases = lm
-	}
 
-	// TODO: imageStore, distributionMetadataStore, and ReferenceStore are only
-	// used above to run migration. They could be initialized in ImageService
-	// if migration is called from daemon/images. layerStore might move as well.
-	d.imageService = images.NewImageService(imgSvcConfig)
-	logrus.Debugf("Max Concurrent Downloads: %d", imgSvcConfig.MaxConcurrentDownloads)
-	logrus.Debugf("Max Concurrent Uploads: %d", imgSvcConfig.MaxConcurrentUploads)
-	logrus.Debugf("Max Download Attempts: %d", imgSvcConfig.MaxDownloadAttempts)
+		imageStore, err := image.NewImageStore(ifs, layerStore)
+		if err != nil {
+			return nil, err
+		}
+
+		distributionMetadataStore, err := dmetadata.NewFSMetadataStore(filepath.Join(imageRoot, "distribution"))
+		if err != nil {
+			return nil, err
+		}
+
+		imgSvcConfig := images.ImageServiceConfig{
+			ContainerStore:            d.containers,
+			DistributionMetadataStore: distributionMetadataStore,
+			EventsService:             d.EventsService,
+			ImageStore:                imageStore,
+			LayerStore:                layerStore,
+			MaxConcurrentDownloads:    config.MaxConcurrentDownloads,
+			MaxConcurrentUploads:      config.MaxConcurrentUploads,
+			MaxDownloadAttempts:       config.MaxDownloadAttempts,
+			ReferenceStore:            rs,
+			RegistryService:           registryService,
+			ContentNamespace:          config.ContainerdNamespace,
+		}
+
+		// This is a temporary environment variables used in CI to allow pushing
+		// manifest v2 schema 1 images to test-registries used for testing *pulling*
+		// these images.
+		if os.Getenv("DOCKER_ALLOW_SCHEMA1_PUSH_DONOTUSE") != "" {
+			imgSvcConfig.TrustKey, err = loadOrCreateTrustKey(config.TrustKeyPath)
+			if err != nil {
+				return nil, err
+			}
+			if err = system.MkdirAll(filepath.Join(config.Root, "trust"), 0700); err != nil {
+				return nil, err
+			}
+		}
+
+		// containerd is not currently supported with Windows.
+		// So sometimes d.containerdCli will be nil
+		// In that case we'll create a local content store... but otherwise we'll use containerd
+		if d.containerdCli != nil {
+			imgSvcConfig.Leases = d.containerdCli.LeasesService()
+			imgSvcConfig.ContentStore = d.containerdCli.ContentStore()
+		} else {
+			cs, lm, err := d.configureLocalContentStore()
+			if err != nil {
+				return nil, err
+			}
+			imgSvcConfig.ContentStore = cs
+			imgSvcConfig.Leases = lm
+		}
+
+		// TODO: imageStore, distributionMetadataStore, and ReferenceStore are only
+		// used above to run migration. They could be initialized in ImageService
+		// if migration is called from daemon/images. layerStore might move as well.
+		d.imageService = images.NewImageService(imgSvcConfig)
+
+		logrus.Debugf("Max Concurrent Downloads: %d", imgSvcConfig.MaxConcurrentDownloads)
+		logrus.Debugf("Max Concurrent Uploads: %d", imgSvcConfig.MaxConcurrentUploads)
+		logrus.Debugf("Max Download Attempts: %d", imgSvcConfig.MaxDownloadAttempts)
+	}
 
 	go d.execCommandGC()
 
@@ -1347,14 +1357,6 @@ func (daemon *Daemon) setGenericResources(conf *config.Config) error {
 	return nil
 }
 
-func setDefaultMtu(conf *config.Config) {
-	// do nothing if the config does not have the default 0 value.
-	if conf.Mtu != 0 {
-		return
-	}
-	conf.Mtu = config.DefaultNetworkMtu
-}
-
 // IsShuttingDown tells whether the daemon is shutting down or not
 func (daemon *Daemon) IsShuttingDown() bool {
 	return daemon.shutdown
@@ -1474,7 +1476,7 @@ func (daemon *Daemon) IdentityMapping() idtools.IdentityMapping {
 }
 
 // ImageService returns the Daemon's ImageService
-func (daemon *Daemon) ImageService() *images.ImageService {
+func (daemon *Daemon) ImageService() ImageService {
 	return daemon.imageService
 }
 
@@ -1482,7 +1484,7 @@ func (daemon *Daemon) ImageService() *images.ImageService {
 func (daemon *Daemon) BuilderBackend() builder.Backend {
 	return struct {
 		*Daemon
-		*images.ImageService
+		ImageService
 	}{daemon, daemon.imageService}
 }
 

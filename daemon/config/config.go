@@ -51,10 +51,6 @@ const (
 	// DefaultPluginNamespace is the name of the default containerd namespace used for plugins.
 	DefaultPluginNamespace = "plugins.moby"
 
-	// LinuxV1RuntimeName is the runtime used to specify the containerd v1 shim with the runc binary
-	// Note this is different than io.containerd.runc.v1 which would be the v1 shim using the v2 shim API.
-	// This is specifically for the v1 shim using the v1 shim API.
-	LinuxV1RuntimeName = "io.containerd.runtime.v1.linux"
 	// LinuxV2RuntimeName is the runtime used to specify the containerd v2 runc shim
 	LinuxV2RuntimeName = "io.containerd.runc.v2"
 
@@ -67,7 +63,6 @@ const (
 
 var builtinRuntimes = map[string]bool{
 	StockRuntimeName:   true,
-	LinuxV1RuntimeName: true,
 	LinuxV2RuntimeName: true,
 }
 
@@ -181,23 +176,6 @@ type CommonConfig struct {
 	// alive upon daemon shutdown/start
 	LiveRestoreEnabled bool `json:"live-restore,omitempty"`
 
-	// ClusterStore is the storage backend used for the cluster information. It is used by both
-	// multihost networking (to store networks and endpoints information) and by the node discovery
-	// mechanism.
-	// Deprecated: host-discovery and overlay networks with external k/v stores are deprecated
-	ClusterStore string `json:"cluster-store,omitempty"`
-
-	// ClusterOpts is used to pass options to the discovery package for tuning libkv settings, such
-	// as TLS configuration settings.
-	// Deprecated: host-discovery and overlay networks with external k/v stores are deprecated
-	ClusterOpts map[string]string `json:"cluster-store-opts,omitempty"`
-
-	// ClusterAdvertise is the network endpoint that the Engine advertises for the purpose of node
-	// discovery. This should be a 'host:port' combination on which that daemon instance is
-	// reachable by other hosts.
-	// Deprecated: host-discovery and overlay networks with external k/v stores are deprecated
-	ClusterAdvertise string `json:"cluster-advertise,omitempty"`
-
 	// MaxConcurrentDownloads is the maximum number of downloads that
 	// may take place at a time for each pull.
 	MaxConcurrentDownloads int `json:"max-concurrent-downloads,omitempty"`
@@ -301,9 +279,20 @@ func (conf *Config) IsValueSet(name string) bool {
 func New() *Config {
 	return &Config{
 		CommonConfig: CommonConfig{
+			ShutdownTimeout: DefaultShutdownTimeout,
 			LogConfig: LogConfig{
 				Config: make(map[string]string),
 			},
+			MaxConcurrentDownloads: DefaultMaxConcurrentDownloads,
+			MaxConcurrentUploads:   DefaultMaxConcurrentUploads,
+			MaxDownloadAttempts:    DefaultDownloadAttempts,
+			Mtu:                    DefaultNetworkMtu,
+			NetworkConfig: NetworkConfig{
+				NetworkControlPlaneMTU: DefaultNetworkMtu,
+			},
+			ContainerdNamespace:       DefaultContainersNamespace,
+			ContainerdPluginNamespace: DefaultPluginNamespace,
+			DefaultRuntime:            StockRuntimeName,
 		},
 	}
 }
@@ -602,6 +591,9 @@ func Validate(config *Config) error {
 	}
 
 	// TODO(thaJeztah) Validations below should not accept "0" to be valid; see Validate() for a more in-depth description of this problem
+	if config.Mtu < 0 {
+		return fmt.Errorf("invalid default MTU: %d", config.Mtu)
+	}
 	if config.MaxConcurrentDownloads < 0 {
 		return fmt.Errorf("invalid max concurrent downloads: %d", config.MaxConcurrentDownloads)
 	}

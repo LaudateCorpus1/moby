@@ -1,8 +1,8 @@
-# syntax=docker/dockerfile:1.3
+# syntax=docker/dockerfile:1
 
 ARG CROSS="false"
 ARG SYSTEMD="false"
-ARG GO_VERSION=1.18.3
+ARG GO_VERSION=1.18.4
 ARG DEBIAN_FRONTEND=noninteractive
 ARG VPNKIT_VERSION=0.5.0
 
@@ -154,10 +154,19 @@ FROM base AS delve
 # attaching debugger to it.
 #
 ARG DELVE_VERSION=v1.8.1
+# Delve on Linux is currently only supported on amd64 and arm64;
+# https://github.com/go-delve/delve/blob/v1.8.1/pkg/proc/native/support_sentinel.go#L1-L6
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
-        GOBIN=/build/ GO111MODULE=on go install "github.com/go-delve/delve/cmd/dlv@${DELVE_VERSION}" \
-     && /build/dlv --help
+        case $(dpkg --print-architecture) in \
+            amd64|arm64) \
+                GOBIN=/build/ GO111MODULE=on go install "github.com/go-delve/delve/cmd/dlv@${DELVE_VERSION}" \
+                && /build/dlv --help \
+                ;; \
+            *) \
+                mkdir -p /build/ \
+                ;; \
+        esac
 
 FROM base AS tomll
 # GOTOML_VERSION specifies the version of the tomll binary to build and install
@@ -193,7 +202,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
         PREFIX=/build /install.sh containerd
 
 FROM base AS golangci_lint
-ARG GOLANGCI_LINT_VERSION=v1.44.0
+ARG GOLANGCI_LINT_VERSION=v1.46.2
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
         GOBIN=/build/ GO111MODULE=on go install "github.com/golangci/golangci-lint/cmd/golangci-lint@${GOLANGCI_LINT_VERSION}" \
@@ -254,6 +263,31 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
 COPY ./contrib/dockerd-rootless.sh /build
 COPY ./contrib/dockerd-rootless-setuptool.sh /build
 
+FROM base AS crun
+ARG CRUN_VERSION=1.4.5
+RUN --mount=type=cache,sharing=locked,id=moby-crun-aptlib,target=/var/lib/apt \
+    --mount=type=cache,sharing=locked,id=moby-crun-aptcache,target=/var/cache/apt \
+        apt-get update && apt-get install -y --no-install-recommends \
+            autoconf \
+            automake \
+            build-essential \
+            libcap-dev \
+            libprotobuf-c-dev \
+            libseccomp-dev \
+            libsystemd-dev \
+            libtool \
+            libudev-dev \
+            libyajl-dev \
+            python3 \
+            ;
+RUN --mount=type=tmpfs,target=/tmp/crun-build \
+    git clone https://github.com/containers/crun.git /tmp/crun-build && \
+    cd /tmp/crun-build && \
+    git checkout -q "${CRUN_VERSION}" && \
+    ./autogen.sh && \
+    ./configure --bindir=/build && \
+    make -j install
+
 FROM --platform=amd64 djs55/vpnkit:${VPNKIT_VERSION} AS vpnkit-amd64
 
 FROM --platform=arm64 djs55/vpnkit:${VPNKIT_VERSION} AS vpnkit-arm64
@@ -291,6 +325,7 @@ RUN --mount=type=cache,sharing=locked,id=moby-dev-aptlib,target=/var/lib/apt \
             libnet1 \
             libnl-3-200 \
             libprotobuf-c1 \
+            libyajl2 \
             net-tools \
             patch \
             pigz \
@@ -332,6 +367,8 @@ COPY --from=runc          /build/ /usr/local/bin/
 COPY --from=containerd    /build/ /usr/local/bin/
 COPY --from=rootlesskit   /build/ /usr/local/bin/
 COPY --from=vpnkit        /build/ /usr/local/bin/
+COPY --from=crun          /build/ /usr/local/bin/
+COPY hack/dockerfile/etc/docker/  /etc/docker/
 ENV PATH=/usr/local/cli:$PATH
 ARG DOCKER_BUILDTAGS
 ENV DOCKER_BUILDTAGS="${DOCKER_BUILDTAGS}"

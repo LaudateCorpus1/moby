@@ -76,12 +76,7 @@ func NewDaemonCli() *DaemonCli {
 }
 
 func (cli *DaemonCli) start(opts *daemonOptions) (err error) {
-	opts.setDefaultOptions()
-
 	if cli.Config, err = loadDaemonCliConfig(opts); err != nil {
-		return err
-	}
-	if err := checkDeprecatedOptions(cli.Config); err != nil {
 		return err
 	}
 
@@ -92,7 +87,7 @@ func (cli *DaemonCli) start(opts *daemonOptions) (err error) {
 
 	if opts.Validate {
 		// If config wasn't OK we wouldn't have made it this far.
-		fmt.Fprintln(os.Stderr, "configuration OK")
+		_, _ = fmt.Fprintln(os.Stderr, "configuration OK")
 		return nil
 	}
 
@@ -293,34 +288,39 @@ func newRouterOptions(config *config.Config, d *daemon.Daemon) (routerOptions, e
 		return opts, err
 	}
 	cgroupParent := newCgroupParent(config)
-	bk, err := buildkit.New(buildkit.Opt{
-		SessionManager:      sm,
-		Root:                filepath.Join(config.Root, "buildkit"),
-		Dist:                d.DistributionServices(),
-		NetworkController:   d.NetworkController(),
-		DefaultCgroupParent: cgroupParent,
-		RegistryHosts:       d.RegistryHosts(),
-		BuilderConfig:       config.Builder,
-		Rootless:            d.Rootless(),
-		IdentityMapping:     d.IdentityMapping(),
-		DNSConfig:           config.DNSConfig,
-		ApparmorProfile:     daemon.DefaultApparmorProfile(),
-	})
-	if err != nil {
-		return opts, err
-	}
-
-	bb, err := buildbackend.NewBackend(d.ImageService(), manager, bk, d.EventsService)
-	if err != nil {
-		return opts, errors.Wrap(err, "failed to create buildmanager")
-	}
-	return routerOptions{
+	ro := routerOptions{
 		sessionManager: sm,
-		buildBackend:   bb,
-		buildkit:       bk,
 		features:       d.Features(),
 		daemon:         d,
-	}, nil
+	}
+	if !d.UsesSnapshotter() {
+		bk, err := buildkit.New(buildkit.Opt{
+			SessionManager:      sm,
+			Root:                filepath.Join(config.Root, "buildkit"),
+			Dist:                d.DistributionServices(),
+			NetworkController:   d.NetworkController(),
+			DefaultCgroupParent: cgroupParent,
+			RegistryHosts:       d.RegistryHosts(),
+			BuilderConfig:       config.Builder,
+			Rootless:            d.Rootless(),
+			IdentityMapping:     d.IdentityMapping(),
+			DNSConfig:           config.DNSConfig,
+			ApparmorProfile:     daemon.DefaultApparmorProfile(),
+		})
+		if err != nil {
+			return opts, err
+		}
+
+		bb, err := buildbackend.NewBackend(d.ImageService(), manager, bk, d.EventsService)
+		if err != nil {
+			return opts, errors.Wrap(err, "failed to create buildmanager")
+		}
+
+		ro.buildBackend = bb
+		ro.buildkit = bk
+	}
+
+	return ro, nil
 }
 
 func (cli *DaemonCli) reloadConfig() {
@@ -386,6 +386,11 @@ func shutdownDaemon(d *daemon.Daemon) {
 }
 
 func loadDaemonCliConfig(opts *daemonOptions) (*config.Config, error) {
+	if !opts.flags.Parsed() {
+		return nil, errors.New(`cannot load CLI config before flags are parsed`)
+	}
+	opts.setDefaultOptions()
+
 	conf := opts.daemonConfig
 	flags := opts.flags
 	conf.Debug = opts.Debug
@@ -510,14 +515,6 @@ func normalizeHosts(config *config.Config) error {
 	return nil
 }
 
-func checkDeprecatedOptions(config *config.Config) error {
-	// Overlay networks with external k/v stores have been deprecated
-	if config.ClusterAdvertise != "" || len(config.ClusterOpts) > 0 || config.ClusterStore != "" {
-		return errors.New("Host-discovery and overlay networks with external k/v stores are deprecated. The 'cluster-advertise', 'cluster-store', and 'cluster-store-opt' options have been removed")
-	}
-	return nil
-}
-
 func initRouter(opts routerOptions) {
 	decoder := runconfig.ContainerDecoder{
 		GetSysInfo: func() *sysinfo.SysInfo {
@@ -529,7 +526,12 @@ func initRouter(opts routerOptions) {
 		// we need to add the checkpoint router before the container router or the DELETE gets masked
 		checkpointrouter.NewRouter(opts.daemon, decoder),
 		container.NewRouter(opts.daemon, decoder, opts.daemon.RawSysInfo().CgroupUnified),
-		image.NewRouter(opts.daemon.ImageService()),
+		image.NewRouter(
+			opts.daemon.ImageService(),
+			opts.daemon.ReferenceStore,
+			opts.daemon.ImageService().DistributionServices().ImageStore,
+			opts.daemon.ImageService().DistributionServices().LayerStore,
+		),
 		systemrouter.NewRouter(opts.daemon, opts.cluster, opts.buildkit, opts.features),
 		volume.NewRouter(opts.daemon.VolumesService(), opts.cluster),
 		build.NewRouter(opts.buildBackend, opts.daemon, opts.features),
@@ -539,14 +541,8 @@ func initRouter(opts routerOptions) {
 		distributionrouter.NewRouter(opts.daemon.ImageService()),
 	}
 
-	grpcBackends := []grpcrouter.Backend{}
-	for _, b := range []interface{}{opts.daemon, opts.buildBackend} {
-		if b, ok := b.(grpcrouter.Backend); ok {
-			grpcBackends = append(grpcBackends, b)
-		}
-	}
-	if len(grpcBackends) > 0 {
-		routers = append(routers, grpcrouter.NewRouter(grpcBackends...))
+	if opts.buildBackend != nil {
+		routers = append(routers, grpcrouter.NewRouter(opts.buildBackend))
 	}
 
 	if opts.daemon.NetworkControllerEnabled() {
@@ -607,37 +603,40 @@ func (cli *DaemonCli) getContainerdDaemonOpts() ([]supervisor.DaemonOpt, error) 
 }
 
 func newAPIServerConfig(config *config.Config) (*apiserver.Config, error) {
-	serverConfig := &apiserver.Config{
-		SocketGroup: config.SocketGroup,
-		Version:     dockerversion.Version,
-		CorsHeaders: config.CorsHeaders,
-	}
-
+	var tlsConfig *tls.Config
 	if config.TLS != nil && *config.TLS {
-		tlsOptions := tlsconfig.Options{
+		var (
+			clientAuth tls.ClientAuthType
+			err        error
+		)
+		if config.TLSVerify == nil || *config.TLSVerify {
+			// server requires and verifies client's certificate
+			clientAuth = tls.RequireAndVerifyClientCert
+		}
+		tlsConfig, err = tlsconfig.Server(tlsconfig.Options{
 			CAFile:             config.CommonTLSOptions.CAFile,
 			CertFile:           config.CommonTLSOptions.CertFile,
 			KeyFile:            config.CommonTLSOptions.KeyFile,
 			ExclusiveRootPools: true,
-		}
-
-		if config.TLSVerify == nil || *config.TLSVerify {
-			// server requires and verifies client's certificate
-			tlsOptions.ClientAuth = tls.RequireAndVerifyClientCert
-		}
-		tlsConfig, err := tlsconfig.Server(tlsOptions)
+			ClientAuth:         clientAuth,
+		})
 		if err != nil {
 			return nil, errors.Wrap(err, "invalid TLS configuration")
 		}
-		serverConfig.TLSConfig = tlsConfig
 	}
 
-	return serverConfig, nil
+	return &apiserver.Config{
+		SocketGroup: config.SocketGroup,
+		Version:     dockerversion.Version,
+		CorsHeaders: config.CorsHeaders,
+		TLSConfig:   tlsConfig,
+		Hosts:       config.Hosts,
+	}, nil
 }
 
 // checkTLSAuthOK checks basically for an explicitly disabled TLS/TLSVerify
 // Going forward we do not want to support a scenario where dockerd listens
-//   on TCP without either TLS client auth (or an explicit opt-in to disable it)
+// on TCP without either TLS client auth (or an explicit opt-in to disable it)
 func checkTLSAuthOK(c *config.Config) bool {
 	if c.TLS == nil {
 		// Either TLS is enabled by default, in which case TLS verification should be enabled by default, or explicitly disabled
@@ -661,14 +660,14 @@ func checkTLSAuthOK(c *config.Config) bool {
 }
 
 func loadListeners(cli *DaemonCli, serverConfig *apiserver.Config) ([]string, error) {
-	if len(cli.Config.Hosts) == 0 {
+	if len(serverConfig.Hosts) == 0 {
 		return nil, errors.New("no hosts configured")
 	}
 	var hosts []string
 
-	for i := 0; i < len(cli.Config.Hosts); i++ {
-		protoAddr := cli.Config.Hosts[i]
-		protoAddrParts := strings.SplitN(cli.Config.Hosts[i], "://", 2)
+	for i := 0; i < len(serverConfig.Hosts); i++ {
+		protoAddr := serverConfig.Hosts[i]
+		protoAddrParts := strings.SplitN(serverConfig.Hosts[i], "://", 2)
 		if len(protoAddrParts) != 2 {
 			return nil, fmt.Errorf("bad format %s, expected PROTO://ADDR", protoAddr)
 		}
@@ -714,15 +713,15 @@ func loadListeners(cli *DaemonCli, serverConfig *apiserver.Config) ([]string, er
 				}
 			}
 		}
-		ls, err := listeners.Init(proto, addr, serverConfig.SocketGroup, serverConfig.TLSConfig)
-		if err != nil {
-			return nil, err
-		}
 		// If we're binding to a TCP port, make sure that a container doesn't try to use it.
 		if proto == "tcp" {
 			if err := allocateDaemonPort(addr); err != nil {
 				return nil, err
 			}
+		}
+		ls, err := listeners.Init(proto, addr, serverConfig.SocketGroup, serverConfig.TLSConfig)
+		if err != nil {
+			return nil, err
 		}
 		logrus.Debugf("Listener created for HTTP on %s (%s)", proto, addr)
 		hosts = append(hosts, protoAddrParts[1])

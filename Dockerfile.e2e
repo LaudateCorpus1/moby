@@ -1,4 +1,4 @@
-ARG GO_VERSION=1.18.3
+ARG GO_VERSION=1.18.4
 
 FROM golang:${GO_VERSION}-alpine AS base
 ENV GO111MODULE=off
@@ -26,12 +26,11 @@ RUN /download-frozen-image-v2.sh /build \
 # See also frozenImages in "testutil/environment/protect.go" (which needs to be updated when adding images to this list)
 
 FROM base AS dockercli
-ENV INSTALL_BINARY_NAME=dockercli
 COPY hack/dockerfile/install/install.sh ./install.sh
-COPY hack/dockerfile/install/$INSTALL_BINARY_NAME.installer ./
-RUN PREFIX=/build ./install.sh $INSTALL_BINARY_NAME
+COPY hack/dockerfile/install/dockercli.installer ./
+RUN PREFIX=/build ./install.sh dockercli
 
-# Build DockerSuite.TestBuild* dependency
+# TestDockerCLIBuildSuite dependency
 FROM base AS contrib
 COPY contrib/syscall-test           /build/syscall-test
 COPY contrib/httpserver/Dockerfile  /build/httpserver/Dockerfile

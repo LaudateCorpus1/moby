@@ -16,7 +16,6 @@ import (
 	"github.com/docker/docker/oci/caps"
 	"github.com/docker/docker/opts"
 	"github.com/docker/docker/pkg/system"
-	"github.com/docker/docker/pkg/truncindex"
 	"github.com/docker/docker/runconfig"
 	volumemounts "github.com/docker/docker/volume/mounts"
 	"github.com/docker/go-connections/nat"
@@ -28,11 +27,11 @@ import (
 
 // GetContainer looks for a container using the provided information, which could be
 // one of the following inputs from the caller:
-//  - A full container ID, which will exact match a container in daemon's list
-//  - A container name, which will only exact match via the GetByName() function
-//  - A partial container ID prefix (e.g. short ID) of any length that is
-//    unique enough to only return a single container object
-//  If none of these searches succeed, an error is returned
+//   - A full container ID, which will exact match a container in daemon's list
+//   - A container name, which will only exact match via the GetByName() function
+//   - A partial container ID prefix (e.g. short ID) of any length that is
+//     unique enough to only return a single container object
+//     If none of these searches succeed, an error is returned
 func (daemon *Daemon) GetContainer(prefixOrName string) (*container.Container, error) {
 	if len(prefixOrName) == 0 {
 		return nil, errors.WithStack(invalidIdentifier(prefixOrName))
@@ -49,10 +48,10 @@ func (daemon *Daemon) GetContainer(prefixOrName string) (*container.Container, e
 		return containerByName, nil
 	}
 
-	containerID, indexError := daemon.idIndex.Get(prefixOrName)
+	containerID, indexError := daemon.containersReplica.GetByPrefix(prefixOrName)
 	if indexError != nil {
 		// When truncindex defines an error type, use that instead
-		if indexError == truncindex.ErrNotExist {
+		if indexError == container.ErrNotExist {
 			return nil, containerNotFound(prefixOrName)
 		}
 		return nil, errdefs.System(indexError)
@@ -119,7 +118,6 @@ func (daemon *Daemon) Register(c *container.Container) error {
 	defer c.Unlock()
 
 	daemon.containers.Add(c.ID, c)
-	daemon.idIndex.Add(c.ID)
 	return c.CheckpointTo(daemon.containersReplica)
 }
 

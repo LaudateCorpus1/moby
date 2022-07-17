@@ -9,6 +9,7 @@ go 1.17
 require (
 	cloud.google.com/go v0.93.3
 	cloud.google.com/go/logging v1.4.2
+	github.com/Azure/go-ansiterm v0.0.0-20210617225240-d185dfc1b5a1
 	github.com/Graylog2/go-gelf v0.0.0-20191017102106-1550ee647df0
 	github.com/Microsoft/go-winio v0.5.2
 	github.com/Microsoft/hcsshim v0.9.3
@@ -18,7 +19,7 @@ require (
 	github.com/bsphere/le_go v0.0.0-20170215134836-7a984a84b549
 	github.com/cloudflare/cfssl v0.0.0-20180323000720-5d63dbd981b5
 	github.com/containerd/cgroups v1.0.4
-	github.com/containerd/containerd v1.6.5
+	github.com/containerd/containerd v1.6.6
 	github.com/containerd/continuity v0.3.0
 	github.com/containerd/fifo v1.0.0
 	github.com/containerd/typeurl v1.0.2
@@ -42,7 +43,7 @@ require (
 	github.com/hashicorp/go-immutable-radix v1.3.1
 	github.com/hashicorp/go-memdb v1.3.2
 	github.com/hashicorp/memberlist v0.2.4
-	github.com/hashicorp/serf v0.8.2
+	github.com/hashicorp/serf v0.8.5
 	github.com/imdario/mergo v0.3.12
 	github.com/ishidawataru/sctp v0.0.0-20210707070123-9a39160e9062
 	github.com/klauspost/compress v1.15.1
@@ -52,8 +53,8 @@ require (
 	github.com/moby/ipvs v1.0.2
 	github.com/moby/locker v1.0.1
 	github.com/moby/swarmkit/v2 v2.0.0-20220420172245-6068d1894d46
-	github.com/moby/sys/mount v0.3.1
-	github.com/moby/sys/mountinfo v0.6.0
+	github.com/moby/sys/mount v0.3.3
+	github.com/moby/sys/mountinfo v0.6.2
 	github.com/moby/sys/signal v0.7.0
 	github.com/moby/sys/symlink v0.2.0
 	github.com/moby/term v0.0.0-20210619224110-3f7ff695adc6
@@ -70,16 +71,15 @@ require (
 	github.com/sirupsen/logrus v1.8.1
 	github.com/spf13/cobra v1.1.3
 	github.com/spf13/pflag v1.0.5
-	github.com/tchap/go-patricia v2.3.0+incompatible
 	github.com/tonistiigi/fsutil v0.0.0-20220115021204-b19f7f9cb274
 	github.com/tonistiigi/go-archvariant v1.0.0
 	github.com/vbatts/tar-split v0.11.2
-	github.com/vishvananda/netlink v1.1.1-0.20210330154013-f5de75959ad5
+	github.com/vishvananda/netlink v1.2.1-beta.2
 	github.com/vishvananda/netns v0.0.0-20210104183010-2eb08e3e575f
 	go.etcd.io/bbolt v1.3.6
 	golang.org/x/net v0.0.0-20211216030914-fe4d6282115f
 	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c
-	golang.org/x/sys v0.0.0-20220412211240-33da011f77ad
+	golang.org/x/sys v0.0.0-20220520151302-bc2c85ada10a
 	golang.org/x/time v0.0.0-20211116232009-f0f3c7e86c11
 	google.golang.org/genproto v0.0.0-20211208223120-3a66f561d7aa
 	google.golang.org/grpc v1.45.0
@@ -88,7 +88,6 @@ require (
 
 require (
 	code.cloudfoundry.org/clock v1.0.0 // indirect
-	github.com/Azure/go-ansiterm v0.0.0-20210617225240-d185dfc1b5a1 // indirect
 	github.com/agext/levenshtein v1.2.3 // indirect
 	github.com/armon/circbuf v0.0.0-20190214190532-5111143e8da2 // indirect
 	github.com/armon/go-metrics v0.0.0-20180917152333-f0300d1749da // indirect
@@ -120,7 +119,7 @@ require (
 	github.com/grpc-ecosystem/go-grpc-prometheus v1.2.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway v1.16.0 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
-	github.com/hashicorp/go-msgpack v0.5.3 // indirect
+	github.com/hashicorp/go-msgpack v0.5.5 // indirect
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
 	github.com/hashicorp/go-sockaddr v1.0.2 // indirect
 	github.com/hashicorp/golang-lru v0.5.4 // indirect
@@ -137,7 +136,6 @@ require (
 	github.com/sean-/seed v0.0.0-20170313163322-e2103e2c3529 // indirect
 	github.com/tinylib/msgp v1.1.0 // indirect
 	github.com/tonistiigi/units v0.0.0-20180711220420-6950e57a87ea // indirect
-	github.com/vmihailenco/msgpack v4.0.4+incompatible // indirect
 	go.etcd.io/etcd/client/pkg/v3 v3.5.2 // indirect
 	go.etcd.io/etcd/pkg/v3 v3.5.2 // indirect
 	go.etcd.io/etcd/raft/v3 v3.5.2 // indirect
@@ -163,29 +161,17 @@ require (
 	google.golang.org/api v0.54.0 // indirect
 	google.golang.org/appengine v1.6.7 // indirect
 	google.golang.org/protobuf v1.27.1 // indirect
-	labix.org/v2/mgo v0.0.0-20140701140051-000000000287 // indirect
 )
 
 replace (
-	github.com/armon/go-metrics => github.com/armon/go-metrics v0.0.0-20150106224455-eb0af217e5e9
+	// More recent versions result in a panic in libnetwork.
+	// FIXME(thaJeztah): we need to fix how we use this library or replace it; see https://github.com/moby/moby/issues/43753
 	github.com/armon/go-radix => github.com/armon/go-radix v0.0.0-20150105235045-e39d623f12e8
-	github.com/coreos/go-systemd => github.com/coreos/go-systemd v0.0.0-20180511133405-39ca1b05acc7
-	github.com/coreos/pkg => github.com/coreos/pkg v0.0.0-20180108230652-97fdf19511ea
-	github.com/hashicorp/go-msgpack => github.com/hashicorp/go-msgpack v0.0.0-20140221154404-71c2886f5a67
-	github.com/hashicorp/go-multierror => github.com/hashicorp/go-multierror v1.0.0
-	github.com/hashicorp/serf => github.com/hashicorp/serf v0.7.1-0.20160317193612-598c54895cc5
-	github.com/matttproud/golang_protobuf_extensions => github.com/matttproud/golang_protobuf_extensions v1.0.1
-	github.com/prometheus/client_golang => github.com/prometheus/client_golang v1.6.0
-	github.com/prometheus/procfs => github.com/prometheus/procfs v0.0.11
-	github.com/vishvananda/netlink => github.com/vishvananda/netlink v1.1.0
-	go.opencensus.io => go.opencensus.io v0.22.3
+	// Resolve dependency hell with github.com/cloudflare/cfssl (transitive via
+	// swarmkit) by pinning the certificate-transparency-go version. Remove once
+	// module go.etcd.io/etcd/server/v3 has upgraded its dependency on
+	// go.opentelemetry.io/otel to v1.
+	github.com/google/certificate-transparency-go => github.com/google/certificate-transparency-go v1.0.20
+	// Removes etcd dependency
+	github.com/rexray/gocsi => github.com/dperny/gocsi v1.2.3-pre
 )
-
-// Removes etcd dependency
-replace github.com/rexray/gocsi => github.com/dperny/gocsi v1.2.3-pre
-
-// Resolve dependency hell with github.com/cloudflare/cfssl (transitive via
-// swarmkit) by pinning the certificate-transparency-go version. Remove once
-// module go.etcd.io/etcd/server/v3 has upgraded its dependency on
-// go.opentelemetry.io/otel to v1.
-replace github.com/google/certificate-transparency-go => github.com/google/certificate-transparency-go v1.0.20
